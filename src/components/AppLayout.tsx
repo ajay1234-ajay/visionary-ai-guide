@@ -1,7 +1,7 @@
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
-import { Eye, LogOut, Home, Upload, History, LayoutDashboard } from 'lucide-react';
+import { Eye, LogOut, Home, Upload, History, LayoutDashboard, Video } from 'lucide-react';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
@@ -15,7 +15,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   const navItems = [
     { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { to: '/detect', label: 'Detect Objects', icon: Upload },
+    { to: '/detect', label: 'Detect', icon: Upload },
+    { to: '/live-detect', label: 'Live Camera', icon: Video },
     { to: '/history', label: 'History', icon: History },
   ];
 

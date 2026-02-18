@@ -10,6 +10,7 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import Detect from "./pages/Detect";
+import LiveDetect from "./pages/LiveDetect";
 import DetectionHistory from "./pages/DetectionHistory";
 import NotFound from "./pages/NotFound";
 
@@ -35,6 +36,7 @@ const App = () => (
               <Route path="/register" element={<Register />} />
               <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
               <Route path="/detect" element={<ProtectedRoute><Detect /></ProtectedRoute>} />
+              <Route path="/live-detect" element={<ProtectedRoute><LiveDetect /></ProtectedRoute>} />
               <Route path="/history" element={<ProtectedRoute><DetectionHistory /></ProtectedRoute>} />
               <Route path="*" element={<NotFound />} />
             </Routes>

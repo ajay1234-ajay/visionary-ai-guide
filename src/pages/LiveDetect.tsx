@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useAuth } from '@/hooks/useAuth';
-import { speak, stopSpeaking } from '@/lib/speech';
+import { speak, stopSpeaking, buildDetectionSummary } from '@/lib/speech';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Video, VideoOff, Volume2, VolumeX, Loader2 } from 'lucide-react';
@@ -48,11 +48,10 @@ export default function LiveDetect() {
     if (!voiceEnabled || !cameraActive) return;
     speakIntervalRef.current = window.setInterval(() => {
       if (detections.length === 0) return;
-      const summary = detections.map(d => d.name).join(', ');
+      const summary = buildDetectionSummary(detections.map(d => d.name));
       if (summary !== lastSpokenRef.current) {
         lastSpokenRef.current = summary;
-        const text = `I see: ${detections.map(d => `${d.name} ${Math.round(d.confidence * 100)} percent`).join(', ')}`;
-        speak(text, 1.1);
+        speak(summary, 0.95);
       }
     }, 2500);
     return () => {

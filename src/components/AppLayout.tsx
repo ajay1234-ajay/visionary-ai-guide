@@ -1,11 +1,13 @@
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
+import { useLanguage, LanguageProvider } from '@/contexts/LanguageContext';
 import { Button } from '@/components/ui/button';
 import {
   Eye, LogOut, Home, Upload, History, LayoutDashboard,
   Video, FileText, Siren, Navigation2, Users, Banknote, Menu, X
 } from 'lucide-react';
 import { useState } from 'react';
+import { speak } from '@/lib/speech';
 
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -19,7 +21,34 @@ const NAV_ITEMS = [
   { to: '/history', label: 'History', icon: History },
 ];
 
-export function AppLayout({ children }: { children: React.ReactNode }) {
+function LanguageToggle() {
+  const { lang, setLang } = useLanguage();
+  const isTamil = lang === 'ta-IN';
+  return (
+    <button
+      onClick={() => {
+        const next = isTamil ? 'en-US' : 'ta-IN';
+        setLang(next);
+        speak(
+          next === 'ta-IN' ? 'தமிழ் குரல் இயக்கப்பட்டது' : 'English voice enabled.',
+          0.95,
+          next,
+        );
+      }}
+      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border transition-colors select-none ${
+        isTamil
+          ? 'bg-primary text-primary-foreground border-primary'
+          : 'bg-background text-muted-foreground border-border hover:bg-muted'
+      }`}
+      aria-label={isTamil ? 'Switch to English voice' : 'Switch to Tamil voice'}
+      title={isTamil ? 'Switch to English' : 'Switch to Tamil'}
+    >
+      {isTamil ? 'தமிழ்' : 'EN'}
+    </button>
+  );
+}
+
+function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -69,6 +98,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             )}
 
             <div className="flex items-center gap-2">
+              {/* Language toggle — always visible */}
+              <LanguageToggle />
+
               {user ? (
                 <>
                   <span className="text-sm text-muted-foreground hidden xl:inline">
@@ -137,5 +169,13 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         <p>AI Guide for Visually Impaired People — Powered by TensorFlow.js & Web Speech API</p>
       </footer>
     </div>
+  );
+}
+
+export function AppLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <LanguageProvider>
+      <AppLayoutInner>{children}</AppLayoutInner>
+    </LanguageProvider>
   );
 }

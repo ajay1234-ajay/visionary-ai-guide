@@ -1,17 +1,26 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { speak, stopSpeaking } from '@/lib/speech';
+import { fetchRoute, geocodeDestination, voiceInstruction } from '@/lib/routing';
+import type { RouteResult } from '@/lib/routing';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { MapPin, Navigation2, Volume2, VolumeX, Loader2, RefreshCw, Search } from 'lucide-react';
+import RouteSteps from '@/components/navigation/RouteSteps';
+import StreetViewCard from '@/components/navigation/StreetViewCard';
+import {
+  MapPin, Navigation2, Volume2, VolumeX, Loader2, RefreshCw,
+  Search, Route, AlertTriangle, ChevronRight, ChevronLeft, CheckCircle2,
+} from 'lucide-react';
+
+// Lazy-load the Leaflet map to avoid SSR issues
+const MapView = lazy(() => import('@/components/navigation/MapView'));
 
 interface LocationInfo {
   lat: number;
   lng: number;
   address: string;
-  suburb?: string;
   city?: string;
   country?: string;
 }
@@ -19,19 +28,32 @@ interface LocationInfo {
 export default function Navigation() {
   const { user } = useAuth();
   const { lang, isTamil } = useLanguage();
+
+  // Location state
   const [location, setLocation] = useState<LocationInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Navigation / routing state
   const [destination, setDestination] = useState('');
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeResult, setRouteResult] = useState<RouteResult | null>(null);
+  const [destAddress, setDestAddress] = useState('');
+  const [activeStep, setActiveStep] = useState(0);
+  const [navigationStarted, setNavigationStarted] = useState(false);
+
+  // Voice & tracking
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [tracking, setTracking] = useState(false);
   const watchIdRef = useRef<number | null>(null);
   const lastAnnouncedRef = useRef<string>('');
+  const stepAnnouncedRef = useRef<number>(-1);
 
+  // ─── Geocode + reverse geocode helpers ───────────────────────────────────
   const reverseGeocode = async (lat: number, lng: number): Promise<LocationInfo> => {
     const res = await fetch(
       `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
-      { headers: { 'Accept-Language': isTamil ? 'ta,en' : 'en' } }
+      { headers: { 'Accept-Language': isTamil ? 'ta,en' : 'en' } },
     );
     const data = await res.json();
     const addr = data.address || {};
@@ -39,15 +61,19 @@ export default function Navigation() {
     const suburb = addr.suburb || addr.neighbourhood || addr.quarter || '';
     const city = addr.city || addr.town || addr.village || '';
     const country = addr.country || '';
-    const address = [road, suburb, city].filter(Boolean).join(', ') || data.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-    return { lat, lng, address, suburb, city, country };
+    const address =
+      [road, suburb, city].filter(Boolean).join(', ') ||
+      data.display_name ||
+      `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    return { lat, lng, address, city, country };
   };
 
+  // ─── Get current location ────────────────────────────────────────────────
   const getLocation = async () => {
     setError(null);
     setLoading(true);
     if (!navigator.geolocation) {
-      setError(isTamil ? 'உங்கள் உலாவி இருப்பிட சேவையை ஆதரிக்கவில்லை.' : 'Geolocation is not supported by your browser.');
+      setError(isTamil ? 'உங்கள் உலாவி இருப்பிட சேவையை ஆதரிக்கவில்லை.' : 'Geolocation is not supported.');
       setLoading(false);
       return;
     }
@@ -74,10 +100,91 @@ export default function Navigation() {
         setError(`${isTamil ? 'இருப்பிடம் கிடைக்கவில்லை' : 'Could not get location'}: ${err.message}`);
         setLoading(false);
       },
-      { enableHighAccuracy: true, timeout: 15000 }
+      { enableHighAccuracy: true, timeout: 15000 },
     );
   };
 
+  // ─── Route calculation ───────────────────────────────────────────────────
+  const calculateRoute = async () => {
+    if (!destination.trim() || !location) return;
+    setRouteLoading(true);
+    setError(null);
+    setRouteResult(null);
+    setActiveStep(0);
+    stepAnnouncedRef.current = -1;
+    try {
+      // Geocode destination
+      const geo = await geocodeDestination(destination, isTamil ? 'ta' : 'en');
+      if (!geo) throw new Error(isTamil ? 'இலக்கு கண்டுபிடிக்கவில்லை' : 'Destination not found');
+      setDestAddress(geo.display);
+
+      // Fetch route
+      const result = await fetchRoute(location.lat, location.lng, geo.lat, geo.lng, lang);
+      setRouteResult(result);
+
+      if (voiceEnabled) {
+        const msg = isTamil
+          ? `வழி கண்டுபிடிக்கப்பட்டது. மொத்த தூரம் ${result.totalDistance}. ${result.totalDuration} ஆகும்.`
+          : `Route found. Total distance ${result.totalDistance}. Estimated time ${result.totalDuration}.`;
+        speak(msg, 0.9, lang);
+      }
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Route calculation failed';
+      setError(message);
+      if (voiceEnabled) speak(isTamil ? 'வழி கண்டுபிடிக்கவில்லை.' : 'Could not find a route.', 0.9, lang);
+    } finally {
+      setRouteLoading(false);
+    }
+  };
+
+  // ─── Navigation step control ─────────────────────────────────────────────
+  const startNavigation = () => {
+    if (!routeResult) return;
+    setNavigationStarted(true);
+    setActiveStep(0);
+    stepAnnouncedRef.current = -1;
+    if (voiceEnabled) {
+      const first = routeResult.steps[0];
+      speak(first ? voiceInstruction(first, lang) : (isTamil ? 'வழிகாட்டுதல் தொடங்கியது.' : 'Navigation started.'), 0.9, lang);
+      stepAnnouncedRef.current = 0;
+    }
+  };
+
+  const stopNavigation = () => {
+    setNavigationStarted(false);
+    stopSpeaking();
+    if (voiceEnabled) speak(isTamil ? 'வழிகாட்டுதல் நிறுத்தப்பட்டது.' : 'Navigation stopped.', 0.9, lang);
+  };
+
+  const nextStep = () => {
+    if (!routeResult) return;
+    const next = Math.min(activeStep + 1, routeResult.steps.length - 1);
+    setActiveStep(next);
+    if (voiceEnabled && stepAnnouncedRef.current !== next) {
+      stepAnnouncedRef.current = next;
+      const step = routeResult.steps[next];
+      if (step.maneuver === 'arrive') {
+        speak(isTamil ? 'நீங்கள் உங்கள் இலக்கை அடைந்துவிட்டீர்கள்!' : 'You have reached your destination!', 0.9, lang);
+      } else {
+        speak(voiceInstruction(step, lang), 0.9, lang);
+      }
+    }
+  };
+
+  const prevStep = () => {
+    const prev = Math.max(activeStep - 1, 0);
+    setActiveStep(prev);
+    if (voiceEnabled && routeResult) {
+      speak(voiceInstruction(routeResult.steps[prev], lang), 0.9, lang);
+    }
+  };
+
+  const readCurrentStep = () => {
+    if (!routeResult) return;
+    speak(voiceInstruction(routeResult.steps[activeStep], lang), 0.9, lang);
+  };
+
+  // ─── Live tracking ───────────────────────────────────────────────────────
   const startTracking = () => {
     if (!navigator.geolocation) return;
     setTracking(true);
@@ -100,7 +207,7 @@ export default function Navigation() {
         }
       },
       (err) => setError(err.message),
-      { enableHighAccuracy: true }
+      { enableHighAccuracy: true },
     );
   };
 
@@ -113,71 +220,44 @@ export default function Navigation() {
     stopSpeaking();
   };
 
-  const openDirections = () => {
-    if (!destination.trim()) return;
-    const from = location ? `${location.lat},${location.lng}` : '';
-    const dest = encodeURIComponent(destination.trim());
-    const url = from
-      ? `https://www.google.com/maps/dir/${from}/${dest}`
-      : `https://www.google.com/maps/dir//${dest}`;
-    window.open(url, '_blank');
-    if (voiceEnabled) {
-      speak(
-        isTamil ? `${destination} க்கு வழிகாட்டுதல் திறக்கிறது.` : `Opening directions to ${destination}.`,
-        0.9, lang,
-      );
-    }
-  };
-
-  const speakLocation = () => {
-    if (location) {
-      speak(
-        isTamil ? `நீங்கள் ${location.address} இல் உள்ளீர்கள்.` : `You are at ${location.address}.`,
-        0.9, lang,
-      );
-    }
-  };
-
-  useEffect(() => {
-    // Re-announce if language changes while location is known
-    lastAnnouncedRef.current = '';
-  }, [lang]);
-
+  // ─── Effects ─────────────────────────────────────────────────────────────
+  useEffect(() => { lastAnnouncedRef.current = ''; }, [lang]);
   useEffect(() => {
     return () => {
-      if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-      }
+      if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
       stopSpeaking();
     };
   }, []);
 
   if (!user) return null;
 
-  return (
-    <div className="max-w-2xl mx-auto px-4 py-10">
-      <div className="flex items-center gap-3 mb-2">
-        <div className="w-10 h-10 rounded-xl bg-secondary/10 flex items-center justify-center">
-          <Navigation2 className="w-5 h-5 text-secondary" />
-        </div>
-        <h1 className="text-3xl font-bold text-foreground">
-          {isTamil ? 'GPS வழிகாட்டுதல்' : 'GPS Navigation'}
-        </h1>
-      </div>
-      <p className="text-muted-foreground mb-8">
-        {isTamil
-          ? 'உங்கள் தற்போதைய இருப்பிடத்தை சத்தமாக படிக்கவும், குரல் வழிகாட்டுதலுடன் செல்லவும்'
-          : 'Get your current location read aloud and navigate with voice guidance'}
-      </p>
+  const currentStep = routeResult?.steps[activeStep];
+  const isArrived = currentStep?.maneuver === 'arrive';
 
-      {/* Voice toggle */}
-      <div className="flex gap-3 mb-6">
+  return (
+    <div className="max-w-3xl mx-auto px-4 py-8 space-y-6">
+      {/* Header */}
+      <div>
+        <div className="flex items-center gap-3 mb-1">
+          <div className="w-10 h-10 rounded-xl bg-secondary/10 flex items-center justify-center">
+            <Navigation2 className="w-5 h-5 text-secondary" />
+          </div>
+          <h1 className="text-3xl font-bold text-foreground">
+            {isTamil ? 'GPS வழிகாட்டுதல்' : 'GPS Navigation'}
+          </h1>
+        </div>
+        <p className="text-muted-foreground ml-13">
+          {isTamil
+            ? 'குரல் வழிகாட்டுதலுடன் படிப்படியான வழிமுறைகள்'
+            : 'Step-by-step directions with voice guidance'}
+        </p>
+      </div>
+
+      {/* Voice + Location controls */}
+      <div className="flex flex-wrap gap-2">
         <Button
           variant="outline"
-          onClick={() => {
-            setVoiceEnabled(v => !v);
-            if (voiceEnabled) stopSpeaking();
-          }}
+          onClick={() => { setVoiceEnabled(v => !v); if (voiceEnabled) stopSpeaking(); }}
           aria-label={voiceEnabled ? 'Disable voice' : 'Enable voice'}
         >
           {voiceEnabled ? <Volume2 className="w-4 h-4 mr-2" /> : <VolumeX className="w-4 h-4 mr-2" />}
@@ -187,130 +267,195 @@ export default function Navigation() {
           {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
           {isTamil ? 'என் இருப்பிடம் பெறு' : 'Get My Location'}
         </Button>
+        {!tracking ? (
+          <Button variant="secondary" onClick={startTracking} disabled={!location}>
+            <Navigation2 className="w-4 h-4 mr-2" />
+            {isTamil ? 'நேரடி கண்காணிப்பு' : 'Live Track'}
+          </Button>
+        ) : (
+          <Button variant="destructive" onClick={stopTracking}>
+            {isTamil ? 'கண்காணிப்பு நிறுத்து' : 'Stop Tracking'}
+          </Button>
+        )}
       </div>
 
+      {tracking && (
+        <div className="flex items-center gap-2 text-sm text-secondary">
+          <span className="w-2 h-2 rounded-full bg-secondary animate-pulse" />
+          {isTamil ? 'உங்கள் இருப்பிடத்தை கண்காணிக்கிறது…' : 'Tracking your location…'}
+        </div>
+      )}
+
       {error && (
-        <Card className="mb-6 border-destructive">
-          <CardContent className="p-4 text-destructive text-sm">{error}</CardContent>
+        <Card className="border-destructive">
+          <CardContent className="p-4 flex items-start gap-2 text-destructive text-sm">
+            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+            <span>{error}</span>
+          </CardContent>
         </Card>
       )}
 
-      {/* Current location */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <MapPin className="w-4 h-4 text-primary" />
-            {isTamil ? 'உங்கள் தற்போதைய இருப்பிடம்' : 'Your Current Location'}
+      {/* Current location + Map */}
+      {location && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <MapPin className="w-4 h-4 text-primary" />
+              {isTamil ? 'உங்கள் தற்போதைய இருப்பிடம்' : 'Your Current Location'}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="p-3 rounded-lg bg-muted/50 text-foreground font-medium text-sm" aria-live="polite">
+              📍 {location.address}
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+              <span className="px-2 py-1 rounded bg-muted">Lat: {location.lat.toFixed(5)}</span>
+              <span className="px-2 py-1 rounded bg-muted">Lng: {location.lng.toFixed(5)}</span>
+              {location.city && <span className="px-2 py-1 rounded bg-muted">{location.city}</span>}
+              {location.country && <span className="px-2 py-1 rounded bg-muted">{location.country}</span>}
+            </div>
+
+            {/* Leaflet Map */}
+            <div className="h-56 w-full rounded-lg overflow-hidden border border-border">
+              <Suspense fallback={<div className="h-full w-full bg-muted flex items-center justify-center text-sm text-muted-foreground"><Loader2 className="w-4 h-4 animate-spin mr-2" />Loading map…</div>}>
+                <MapView
+                  currentLat={location.lat}
+                  currentLng={location.lng}
+                  currentAddress={location.address}
+                  destLat={routeResult?.destLat}
+                  destLng={routeResult?.destLng}
+                  destAddress={destAddress}
+                  routeCoords={routeResult?.routeCoords}
+                />
+              </Suspense>
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => speak(
+                isTamil ? `நீங்கள் ${location.address} இல் உள்ளீர்கள்.` : `You are at ${location.address}.`,
+                0.9, lang,
+              )}
+            >
+              <Volume2 className="w-4 h-4 mr-1" />
+              {isTamil ? 'சத்தமாக படி' : 'Read Location Aloud'}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Route planner */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Route className="w-4 h-4 text-primary" />
+            {isTamil ? 'வழிகாட்டுதல் திட்டமிடு' : 'Plan Your Route'}
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          {loading && (
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span className="text-sm">{isTamil ? 'இருப்பிடம் கண்டறிகிறது…' : 'Getting location…'}</span>
-            </div>
-          )}
-          {location && !loading && (
-            <div className="space-y-3">
-              <div
-                className="p-4 rounded-lg bg-muted/50 text-foreground font-medium"
-                aria-live="polite"
-              >
-                📍 {location.address}
-              </div>
-              <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                <span className="px-2 py-1 rounded bg-muted">Lat: {location.lat.toFixed(5)}</span>
-                <span className="px-2 py-1 rounded bg-muted">Lng: {location.lng.toFixed(5)}</span>
-                {location.city && <span className="px-2 py-1 rounded bg-muted">{location.city}</span>}
-                {location.country && <span className="px-2 py-1 rounded bg-muted">{location.country}</span>}
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={speakLocation} aria-label="Read location aloud">
-                  <Volume2 className="w-4 h-4 mr-1" />
-                  {isTamil ? 'சத்தமாக படி' : 'Read Aloud'}
-                </Button>
-                <a
-                  href={`https://maps.google.com/?q=${location.lat},${location.lng}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-md border border-border hover:bg-muted transition-colors"
-                  aria-label="Open in Google Maps"
-                >
-                  <MapPin className="w-4 h-4" />
-                  {isTamil ? 'வரைபடத்தில் திற' : 'Open in Maps'}
-                </a>
-              </div>
-            </div>
-          )}
-          {!location && !loading && (
-            <p className="text-sm text-muted-foreground">
-              {isTamil
-                ? '"என் இருப்பிடம் பெறு" அழுத்தவும்.'
-                : 'Press "Get My Location" to find where you are.'}
+        <CardContent className="space-y-3">
+          <div className="flex gap-2">
+            <Input
+              placeholder={isTamil ? 'இலக்கை உள்ளிடவும் (எ.கா. சென்னை மத்திய)' : 'Enter destination (e.g. Chennai Central)'}
+              value={destination}
+              onChange={e => setDestination(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && calculateRoute()}
+              aria-label="Destination address"
+              disabled={routeLoading}
+            />
+            <Button onClick={calculateRoute} disabled={!destination.trim() || !location || routeLoading}>
+              {routeLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+              <span className="ml-2 hidden sm:inline">{isTamil ? 'வழி தேடு' : 'Get Route'}</span>
+            </Button>
+          </div>
+
+          {!location && (
+            <p className="text-xs text-muted-foreground">
+              {isTamil ? 'முதலில் உங்கள் இருப்பிடத்தை பெறவும்.' : 'Get your location first to calculate a route.'}
             </p>
           )}
-        </CardContent>
-      </Card>
 
-      {/* Live tracking */}
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="text-base">
-            {isTamil ? 'நேரடி இருப்பிட கண்காணிப்பு' : 'Live Location Tracking'}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            {isTamil
-              ? 'நீங்கள் நகரும்போது தானாக உங்கள் இருப்பிடத்தை அறிவிக்கிறது.'
-              : 'Automatically announces your location as you move.'}
-          </p>
-          {!tracking ? (
-            <Button onClick={startTracking} className="w-full">
-              <Navigation2 className="w-4 h-4 mr-2" />
-              {isTamil ? 'நேரடி கண்காணிப்பு தொடங்கு' : 'Start Live Tracking'}
-            </Button>
-          ) : (
-            <Button onClick={stopTracking} variant="destructive" className="w-full">
-              {isTamil ? 'கண்காணிப்பு நிறுத்து' : 'Stop Tracking'}
-            </Button>
-          )}
-          {tracking && (
-            <div className="flex items-center gap-2 text-sm text-secondary">
-              <span className="w-2 h-2 rounded-full bg-secondary animate-pulse" />
-              {isTamil ? 'உங்கள் இருப்பிடத்தை கண்காணிக்கிறது…' : 'Tracking your location…'}
+          {/* Route summary + navigation controls */}
+          {routeResult && (
+            <div className="space-y-4 pt-1">
+              <div className="flex flex-wrap gap-3 text-sm">
+                <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 text-primary font-medium">
+                  <Route className="w-3.5 h-3.5" />
+                  {routeResult.totalDistance}
+                </span>
+                <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-secondary/10 text-secondary font-medium">
+                  🕒 {routeResult.totalDuration}
+                </span>
+                {destAddress && (
+                  <span className="flex items-center gap-1.5 text-muted-foreground text-xs">
+                    🏁 {destAddress.split(',').slice(0, 2).join(',')}
+                  </span>
+                )}
+              </div>
+
+              {/* Navigation control bar */}
+              {!navigationStarted ? (
+                <Button className="w-full" onClick={startNavigation}>
+                  <Navigation2 className="w-4 h-4 mr-2" />
+                  {isTamil ? 'வழிகாட்டுதல் தொடங்கு' : 'Start Navigation'}
+                </Button>
+              ) : (
+                <div className="space-y-3">
+                  {/* Active step banner */}
+                  {currentStep && (
+                    <div className={`p-4 rounded-lg flex items-start gap-3 ${isArrived ? 'bg-accent border border-border' : 'bg-primary/10 border border-primary/30'}`}>
+                      {isArrived
+                        ? <CheckCircle2 className="w-5 h-5 text-secondary flex-shrink-0 mt-0.5" />
+                        : <Navigation2 className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
+                      }
+                      <div>
+                        <p className={`font-semibold text-sm ${isArrived ? 'text-secondary' : 'text-primary'}`}>
+                          {currentStep.instruction}
+                        </p>
+                        {currentStep.distance && (
+                          <p className="text-xs text-muted-foreground mt-0.5">{currentStep.distance}</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Step navigation buttons */}
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={prevStep} disabled={activeStep === 0}>
+                      <ChevronLeft className="w-4 h-4" />
+                      {isTamil ? 'முந்தையது' : 'Previous'}
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={readCurrentStep} className="flex-1">
+                      <Volume2 className="w-4 h-4 mr-1" />
+                      {isTamil ? 'மீண்டும் படி' : 'Repeat'}
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={nextStep} disabled={isArrived}>
+                      {isTamil ? 'அடுத்தது' : 'Next'}
+                      <ChevronRight className="w-4 h-4" />
+                    </Button>
+                  </div>
+
+                  <Button variant="destructive" size="sm" className="w-full" onClick={stopNavigation}>
+                    {isTamil ? 'வழிகாட்டுதல் நிறுத்து' : 'Stop Navigation'}
+                  </Button>
+                </div>
+              )}
+
+              {/* Step list */}
+              <RouteSteps
+                steps={routeResult.steps}
+                activeIndex={navigationStarted ? activeStep : -1}
+                isTamil={isTamil}
+              />
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Get directions */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Search className="w-4 h-4 text-primary" />
-            {isTamil ? 'வழிகாட்டுதல் பெறு' : 'Get Directions'}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <Input
-            placeholder={isTamil ? 'இலக்கை உள்ளிடவும் (எ.கா. சென்னை மத்திய, மருத்துவமனை)' : 'Enter destination (e.g. Chennai Central, hospital)'}
-            value={destination}
-            onChange={e => setDestination(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && openDirections()}
-            aria-label="Destination address"
-          />
-          <Button onClick={openDirections} disabled={!destination.trim()} className="w-full">
-            <Navigation2 className="w-4 h-4 mr-2" />
-            {isTamil ? 'வரைபடத்தில் வழி திற' : 'Open Directions in Maps'}
-          </Button>
-          <p className="text-xs text-muted-foreground">
-            {isTamil
-              ? 'உங்கள் தற்போதைய இருப்பிடத்திலிருந்து Google Maps இல் படிப்படியான வழிகாட்டுதலை திறக்கிறது.'
-              : 'Opens Google Maps with step-by-step navigation from your current location.'}
-          </p>
-        </CardContent>
-      </Card>
+      {/* Street View card */}
+      {location && (
+        <StreetViewCard lat={location.lat} lng={location.lng} isTamil={isTamil} />
+      )}
     </div>
   );
 }

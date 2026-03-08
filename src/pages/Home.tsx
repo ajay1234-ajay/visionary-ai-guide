@@ -3,9 +3,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import {
   Eye, Video, Upload, FileText, Users, Banknote,
-  Navigation2, Siren, ArrowRight, Volume2, Zap, Shield
+  Navigation2, Siren, ArrowRight, Volume2, Zap, Shield, Mic
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 const FEATURE_CARDS = [
   {

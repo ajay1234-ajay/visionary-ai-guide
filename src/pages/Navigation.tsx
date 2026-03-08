@@ -403,7 +403,7 @@ export default function Navigation() {
                 <div className="space-y-3">
                   {/* Active step banner */}
                   {currentStep && (
-                    <div className={`p-4 rounded-lg flex items-start gap-3 ${isArrived ? 'bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800' : 'bg-primary/10 border border-primary/30'}`}>
+                    <div className={`p-4 rounded-lg flex items-start gap-3 ${isArrived ? 'bg-accent border border-border' : 'bg-primary/10 border border-primary/30'}`}>
                       {isArrived
                         ? <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
                         : <Navigation2 className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />

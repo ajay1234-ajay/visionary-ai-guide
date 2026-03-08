@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/hooks/useAuth';
+import { useLanguage } from '@/contexts/LanguageContext';
 import { speak, stopSpeaking } from '@/lib/speech';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,6 +18,7 @@ interface LocationInfo {
 
 export default function Navigation() {
   const { user } = useAuth();
+  const { lang, isTamil } = useLanguage();
   const [location, setLocation] = useState<LocationInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,7 +31,7 @@ export default function Navigation() {
   const reverseGeocode = async (lat: number, lng: number): Promise<LocationInfo> => {
     const res = await fetch(
       `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
-      { headers: { 'Accept-Language': 'en' } }
+      { headers: { 'Accept-Language': isTamil ? 'ta,en' : 'en' } }
     );
     const data = await res.json();
     const addr = data.address || {};
@@ -45,7 +47,7 @@ export default function Navigation() {
     setError(null);
     setLoading(true);
     if (!navigator.geolocation) {
-      setError('Geolocation is not supported by your browser.');
+      setError(isTamil ? 'உங்கள் உலாவி இருப்பிட சேவையை ஆதரிக்கவில்லை.' : 'Geolocation is not supported by your browser.');
       setLoading(false);
       return;
     }
@@ -55,10 +57,12 @@ export default function Navigation() {
           const info = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
           setLocation(info);
           if (voiceEnabled) {
-            const msg = `You are currently at ${info.address}.`;
+            const msg = isTamil
+              ? `நீங்கள் தற்போது ${info.address} இல் உள்ளீர்கள்.`
+              : `You are currently at ${info.address}.`;
             if (msg !== lastAnnouncedRef.current) {
               lastAnnouncedRef.current = msg;
-              speak(msg);
+              speak(msg, 0.9, lang);
             }
           }
         } catch {
@@ -67,7 +71,7 @@ export default function Navigation() {
         setLoading(false);
       },
       (err) => {
-        setError(`Could not get location: ${err.message}. Please allow location access.`);
+        setError(`${isTamil ? 'இருப்பிடம் கிடைக்கவில்லை' : 'Could not get location'}: ${err.message}`);
         setLoading(false);
       },
       { enableHighAccuracy: true, timeout: 15000 }
@@ -83,10 +87,12 @@ export default function Navigation() {
           const info = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
           setLocation(info);
           if (voiceEnabled) {
-            const msg = `You are at ${info.address}.`;
+            const msg = isTamil
+              ? `நீங்கள் ${info.address} இல் உள்ளீர்கள்.`
+              : `You are at ${info.address}.`;
             if (msg !== lastAnnouncedRef.current) {
               lastAnnouncedRef.current = msg;
-              speak(msg);
+              speak(msg, 0.9, lang);
             }
           }
         } catch {
@@ -115,14 +121,27 @@ export default function Navigation() {
       ? `https://www.google.com/maps/dir/${from}/${dest}`
       : `https://www.google.com/maps/dir//${dest}`;
     window.open(url, '_blank');
-    if (voiceEnabled) speak(`Opening directions to ${destination}.`);
+    if (voiceEnabled) {
+      speak(
+        isTamil ? `${destination} க்கு வழிகாட்டுதல் திறக்கிறது.` : `Opening directions to ${destination}.`,
+        0.9, lang,
+      );
+    }
   };
 
   const speakLocation = () => {
     if (location) {
-      speak(`You are at ${location.address}.`);
+      speak(
+        isTamil ? `நீங்கள் ${location.address} இல் உள்ளீர்கள்.` : `You are at ${location.address}.`,
+        0.9, lang,
+      );
     }
   };
+
+  useEffect(() => {
+    // Re-announce if language changes while location is known
+    lastAnnouncedRef.current = '';
+  }, [lang]);
 
   useEffect(() => {
     return () => {
@@ -141,10 +160,14 @@ export default function Navigation() {
         <div className="w-10 h-10 rounded-xl bg-secondary/10 flex items-center justify-center">
           <Navigation2 className="w-5 h-5 text-secondary" />
         </div>
-        <h1 className="text-3xl font-bold text-foreground">GPS Navigation</h1>
+        <h1 className="text-3xl font-bold text-foreground">
+          {isTamil ? 'GPS வழிகாட்டுதல்' : 'GPS Navigation'}
+        </h1>
       </div>
       <p className="text-muted-foreground mb-8">
-        Get your current location read aloud and navigate with voice guidance
+        {isTamil
+          ? 'உங்கள் தற்போதைய இருப்பிடத்தை சத்தமாக படிக்கவும், குரல் வழிகாட்டுதலுடன் செல்லவும்'
+          : 'Get your current location read aloud and navigate with voice guidance'}
       </p>
 
       {/* Voice toggle */}
@@ -158,11 +181,11 @@ export default function Navigation() {
           aria-label={voiceEnabled ? 'Disable voice' : 'Enable voice'}
         >
           {voiceEnabled ? <Volume2 className="w-4 h-4 mr-2" /> : <VolumeX className="w-4 h-4 mr-2" />}
-          Voice {voiceEnabled ? 'On' : 'Off'}
+          {isTamil ? (voiceEnabled ? 'குரல் இயக்கம்' : 'குரல் நிறுத்தம்') : `Voice ${voiceEnabled ? 'On' : 'Off'}`}
         </Button>
         <Button onClick={getLocation} disabled={loading}>
           {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-          Get My Location
+          {isTamil ? 'என் இருப்பிடம் பெறு' : 'Get My Location'}
         </Button>
       </div>
 
@@ -176,14 +199,15 @@ export default function Navigation() {
       <Card className="mb-6">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <MapPin className="w-4 h-4 text-primary" /> Your Current Location
+            <MapPin className="w-4 h-4 text-primary" />
+            {isTamil ? 'உங்கள் தற்போதைய இருப்பிடம்' : 'Your Current Location'}
           </CardTitle>
         </CardHeader>
         <CardContent>
           {loading && (
             <div className="flex items-center gap-2 text-muted-foreground">
               <Loader2 className="w-4 h-4 animate-spin" />
-              <span className="text-sm">Getting location…</span>
+              <span className="text-sm">{isTamil ? 'இருப்பிடம் கண்டறிகிறது…' : 'Getting location…'}</span>
             </div>
           )}
           {location && !loading && (
@@ -202,7 +226,8 @@ export default function Navigation() {
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={speakLocation} aria-label="Read location aloud">
-                  <Volume2 className="w-4 h-4 mr-1" /> Read Aloud
+                  <Volume2 className="w-4 h-4 mr-1" />
+                  {isTamil ? 'சத்தமாக படி' : 'Read Aloud'}
                 </Button>
                 <a
                   href={`https://maps.google.com/?q=${location.lat},${location.lng}`}
@@ -211,14 +236,17 @@ export default function Navigation() {
                   className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-md border border-border hover:bg-muted transition-colors"
                   aria-label="Open in Google Maps"
                 >
-                  <MapPin className="w-4 h-4" /> Open in Maps
+                  <MapPin className="w-4 h-4" />
+                  {isTamil ? 'வரைபடத்தில் திற' : 'Open in Maps'}
                 </a>
               </div>
             </div>
           )}
           {!location && !loading && (
             <p className="text-sm text-muted-foreground">
-              Press "Get My Location" to find where you are.
+              {isTamil
+                ? '"என் இருப்பிடம் பெறு" அழுத்தவும்.'
+                : 'Press "Get My Location" to find where you are.'}
             </p>
           )}
         </CardContent>
@@ -227,25 +255,30 @@ export default function Navigation() {
       {/* Live tracking */}
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle className="text-base">Live Location Tracking</CardTitle>
+          <CardTitle className="text-base">
+            {isTamil ? 'நேரடி இருப்பிட கண்காணிப்பு' : 'Live Location Tracking'}
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Automatically announces your location as you move.
+            {isTamil
+              ? 'நீங்கள் நகரும்போது தானாக உங்கள் இருப்பிடத்தை அறிவிக்கிறது.'
+              : 'Automatically announces your location as you move.'}
           </p>
           {!tracking ? (
             <Button onClick={startTracking} className="w-full">
-              <Navigation2 className="w-4 h-4 mr-2" /> Start Live Tracking
+              <Navigation2 className="w-4 h-4 mr-2" />
+              {isTamil ? 'நேரடி கண்காணிப்பு தொடங்கு' : 'Start Live Tracking'}
             </Button>
           ) : (
             <Button onClick={stopTracking} variant="destructive" className="w-full">
-              Stop Tracking
+              {isTamil ? 'கண்காணிப்பு நிறுத்து' : 'Stop Tracking'}
             </Button>
           )}
           {tracking && (
             <div className="flex items-center gap-2 text-sm text-secondary">
               <span className="w-2 h-2 rounded-full bg-secondary animate-pulse" />
-              Tracking your location…
+              {isTamil ? 'உங்கள் இருப்பிடத்தை கண்காணிக்கிறது…' : 'Tracking your location…'}
             </div>
           )}
         </CardContent>
@@ -255,22 +288,26 @@ export default function Navigation() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
-            <Search className="w-4 h-4 text-primary" /> Get Directions
+            <Search className="w-4 h-4 text-primary" />
+            {isTamil ? 'வழிகாட்டுதல் பெறு' : 'Get Directions'}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <Input
-            placeholder="Enter destination (e.g. Chennai Central, hospital)"
+            placeholder={isTamil ? 'இலக்கை உள்ளிடவும் (எ.கா. சென்னை மத்திய, மருத்துவமனை)' : 'Enter destination (e.g. Chennai Central, hospital)'}
             value={destination}
             onChange={e => setDestination(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && openDirections()}
             aria-label="Destination address"
           />
           <Button onClick={openDirections} disabled={!destination.trim()} className="w-full">
-            <Navigation2 className="w-4 h-4 mr-2" /> Open Directions in Maps
+            <Navigation2 className="w-4 h-4 mr-2" />
+            {isTamil ? 'வரைபடத்தில் வழி திற' : 'Open Directions in Maps'}
           </Button>
           <p className="text-xs text-muted-foreground">
-            Opens Google Maps with step-by-step navigation from your current location.
+            {isTamil
+              ? 'உங்கள் தற்போதைய இருப்பிடத்திலிருந்து Google Maps இல் படிப்படியான வழிகாட்டுதலை திறக்கிறது.'
+              : 'Opens Google Maps with step-by-step navigation from your current location.'}
           </p>
         </CardContent>
       </Card>

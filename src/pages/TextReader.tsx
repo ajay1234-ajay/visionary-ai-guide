@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { useAuth } from '@/hooks/useAuth';
+import { useLanguage } from '@/contexts/LanguageContext';
 import { speak, stopSpeaking } from '@/lib/speech';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -8,6 +9,7 @@ import { createWorker } from 'tesseract.js';
 
 export default function TextReader() {
   const { user } = useAuth();
+  const { lang, isTamil } = useLanguage();
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [extractedText, setExtractedText] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -31,7 +33,9 @@ export default function TextReader() {
     setLoading(true);
     setProgress(0);
     try {
-      const worker = await createWorker('eng', 1, {
+      // Support both Tamil and English OCR
+      const ocrLang = isTamil ? 'tam+eng' : 'eng';
+      const worker = await createWorker(ocrLang, 1, {
         logger: (m) => {
           if (m.status === 'recognizing text') {
             setProgress(Math.round(m.progress * 100));
@@ -43,25 +47,33 @@ export default function TextReader() {
       const cleaned = text.trim();
       setExtractedText(cleaned);
       if (cleaned) {
-        speak(cleaned, 0.85);
+        speak(cleaned, 0.85, lang);
         setIsSpeaking(true);
       } else {
-        speak('No readable text found in this image.');
+        speak(
+          isTamil ? 'இந்த படத்தில் படிக்கக்கூடிய உரை இல்லை.' : 'No readable text found in this image.',
+          0.85, lang,
+        );
         setIsSpeaking(true);
       }
     } catch {
       setExtractedText('');
-      speak('Could not read text from this image. Please try a clearer image.');
+      speak(
+        isTamil
+          ? 'இந்த படத்திலிருந்து உரையை படிக்க முடியவில்லை. தெளிவான படத்தை முயற்சிக்கவும்.'
+          : 'Could not read text from this image. Please try a clearer image.',
+        0.85, lang,
+      );
     }
     setLoading(false);
-  }, []);
+  }, [lang, isTamil]);
 
   const toggleSpeech = () => {
     if (isSpeaking) {
       stopSpeaking();
       setIsSpeaking(false);
     } else if (extractedText) {
-      speak(extractedText, 0.85);
+      speak(extractedText, 0.85, lang);
       setIsSpeaking(true);
     }
   };
@@ -78,9 +90,13 @@ export default function TextReader() {
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-10">
-      <h1 className="text-3xl font-bold text-foreground mb-2">Text Reader (OCR)</h1>
+      <h1 className="text-3xl font-bold text-foreground mb-2">
+        {isTamil ? 'உரை வாசிப்பி (OCR)' : 'Text Reader (OCR)'}
+      </h1>
       <p className="text-muted-foreground mb-8">
-        Upload an image with text — the AI will read it aloud for you
+        {isTamil
+          ? 'உரையுள்ள படத்தை பதிவேற்றவும் — AI அதை உங்களுக்காக சத்தமாக வாசிக்கும்'
+          : 'Upload an image with text — the AI will read it aloud for you'}
       </p>
 
       {!imageUrl ? (
@@ -89,9 +105,13 @@ export default function TextReader() {
             <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
               <FileText className="w-8 h-8 text-primary" />
             </div>
-            <h2 className="text-xl font-semibold text-foreground mb-2">Upload Image with Text</h2>
+            <h2 className="text-xl font-semibold text-foreground mb-2">
+              {isTamil ? 'உரையுள்ள படத்தை பதிவேற்றவும்' : 'Upload Image with Text'}
+            </h2>
             <p className="text-sm text-muted-foreground mb-6">
-              Works on signs, documents, labels, menus, and more
+              {isTamil
+                ? 'அடையாளங்கள், ஆவணங்கள், லேபல்கள், மெனுக்களில் செயல்படும்'
+                : 'Works on signs, documents, labels, menus, and more'}
             </p>
             <input
               ref={fileInputRef}
@@ -103,7 +123,8 @@ export default function TextReader() {
             />
             <div className="flex gap-3">
               <Button onClick={() => fileInputRef.current?.click()}>
-                <Upload className="w-4 h-4 mr-2" /> Choose File
+                <Upload className="w-4 h-4 mr-2" />
+                {isTamil ? 'கோப்பு தேர்ந்தெடு' : 'Choose File'}
               </Button>
               <Button
                 variant="outline"
@@ -119,7 +140,8 @@ export default function TextReader() {
                   input.click();
                 }}
               >
-                <Camera className="w-4 h-4 mr-2" /> Take Photo
+                <Camera className="w-4 h-4 mr-2" />
+                {isTamil ? 'புகைப்படம் எடு' : 'Take Photo'}
               </Button>
             </div>
           </CardContent>
@@ -138,7 +160,8 @@ export default function TextReader() {
 
           {!extractedText && !loading && (
             <Button onClick={() => runOCR(imageUrl)} className="w-full" size="lg">
-              <FileText className="w-5 h-5 mr-2" /> Read Text from Image
+              <FileText className="w-5 h-5 mr-2" />
+              {isTamil ? 'படத்திலிருந்து உரை படிக்க' : 'Read Text from Image'}
             </Button>
           )}
 
@@ -147,7 +170,9 @@ export default function TextReader() {
               <CardContent className="p-6">
                 <div className="flex items-center gap-3 mb-3">
                   <Loader2 className="w-5 h-5 animate-spin text-primary" />
-                  <span className="text-sm font-medium text-foreground">Reading text… {progress}%</span>
+                  <span className="text-sm font-medium text-foreground">
+                    {isTamil ? `உரை படிக்கிறது… ${progress}%` : `Reading text… ${progress}%`}
+                  </span>
                 </div>
                 <div className="w-full bg-muted rounded-full h-2">
                   <div
@@ -167,7 +192,9 @@ export default function TextReader() {
             <Card>
               <CardContent className="p-6">
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold text-foreground">Extracted Text</h2>
+                  <h2 className="text-lg font-semibold text-foreground">
+                    {isTamil ? 'பிரிக்கப்பட்ட உரை' : 'Extracted Text'}
+                  </h2>
                   <Button
                     variant="outline"
                     size="sm"
@@ -175,9 +202,9 @@ export default function TextReader() {
                     aria-label={isSpeaking ? 'Stop reading' : 'Read text aloud'}
                   >
                     {isSpeaking ? (
-                      <><VolumeX className="w-4 h-4 mr-1" /> Stop</>
+                      <><VolumeX className="w-4 h-4 mr-1" />{isTamil ? 'நிறுத்து' : 'Stop'}</>
                     ) : (
-                      <><Volume2 className="w-4 h-4 mr-1" /> Read Aloud</>
+                      <><Volume2 className="w-4 h-4 mr-1" />{isTamil ? 'சத்தமாக படி' : 'Read Aloud'}</>
                     )}
                   </Button>
                 </div>
@@ -195,14 +222,17 @@ export default function TextReader() {
           {!loading && extractedText === '' && imageUrl && (
             <Card>
               <CardContent className="p-6 text-center text-muted-foreground">
-                No text found in this image. Try a clearer or higher-resolution image.
+                {isTamil
+                  ? 'இந்த படத்தில் உரை இல்லை. தெளிவான படத்தை முயற்சிக்கவும்.'
+                  : 'No text found in this image. Try a clearer or higher-resolution image.'}
               </CardContent>
             </Card>
           )}
 
           <div className="flex gap-3">
             <Button onClick={reset} variant="outline">
-              <RotateCcw className="w-4 h-4 mr-2" /> New Image
+              <RotateCcw className="w-4 h-4 mr-2" />
+              {isTamil ? 'புதிய படம்' : 'New Image'}
             </Button>
           </div>
         </div>

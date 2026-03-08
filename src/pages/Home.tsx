@@ -80,8 +80,23 @@ const HIGHLIGHTS = [
   { icon: Shield, label: '100% Private', desc: 'All processing is on-device — nothing leaves your browser' },
 ];
 
+const VOICE_COMMANDS = [
+  { en: '"open camera" / "start detection"', ta: '"கேமரா திற"', action: 'Live Camera' },
+  { en: '"read text" / "ocr"', ta: '"உரை படி"', action: 'Text Reader' },
+  { en: '"navigation" / "gps"', ta: '"வழிகாட்டுதல்"', action: 'GPS Navigation' },
+  { en: '"emergency" / "sos"', ta: '"அவசரநிலை"', action: 'Emergency SOS' },
+  { en: '"go home" / "home page"', ta: '"முகப்பு"', action: 'Home Page' },
+  { en: '"dashboard"', ta: '"டாஷ்போர்டு"', action: 'Dashboard' },
+  { en: '"face detect"', ta: '"முக கண்டறிதல்"', action: 'Face Detection' },
+  { en: '"currency" / "money"', ta: '"நாணயம்"', action: 'Currency' },
+  { en: '"detect image"', ta: '"படம் கண்டறி"', action: 'Image Detect' },
+  { en: '"history"', ta: '"வரலாறு"', action: 'History' },
+  { en: '"help" / "commands"', ta: '"உதவி"', action: 'List commands' },
+];
+
 export default function Home() {
   const { user } = useAuth();
+  const { isTamil } = useLanguage();
 
   return (
     <div className="flex flex-col min-h-screen">

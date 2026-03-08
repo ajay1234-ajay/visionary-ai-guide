@@ -405,11 +405,11 @@ export default function Navigation() {
                   {currentStep && (
                     <div className={`p-4 rounded-lg flex items-start gap-3 ${isArrived ? 'bg-accent border border-border' : 'bg-primary/10 border border-primary/30'}`}>
                       {isArrived
-                        ? <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                        ? <CheckCircle2 className="w-5 h-5 text-secondary flex-shrink-0 mt-0.5" />
                         : <Navigation2 className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
                       }
                       <div>
-                        <p className={`font-semibold text-sm ${isArrived ? 'text-green-700 dark:text-green-400' : 'text-primary'}`}>
+                        <p className={`font-semibold text-sm ${isArrived ? 'text-secondary' : 'text-primary'}`}>
                           {currentStep.instruction}
                         </p>
                         {currentStep.distance && (

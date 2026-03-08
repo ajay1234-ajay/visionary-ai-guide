@@ -3,7 +3,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { speak, stopSpeaking, buildDetectionSummary } from '@/lib/speech';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Video, VideoOff, Volume2, VolumeX, Loader2 } from 'lucide-react';
+import { Video, VideoOff, Volume2, VolumeX, Loader2, AlertTriangle } from 'lucide-react';
 import * as tf from '@tensorflow/tfjs';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 
@@ -11,6 +11,28 @@ interface DetectedItem {
   name: string;
   confidence: number;
   bbox: [number, number, number, number];
+  proximity: 'close' | 'medium' | 'far';
+}
+
+const OBSTACLE_CLASSES = new Set([
+  'person','car','truck','bus','motorcycle','bicycle','dog','cat',
+  'chair','couch','dining table','bed','toilet','refrigerator',
+  'oven','microwave','tv','laptop','cell phone','book','bottle',
+  'cup','vase','potted plant','suitcase','handbag','backpack',
+  'umbrella','traffic light','stop sign','fire hydrant','bench',
+]);
+
+function getProximity(bbox: [number, number, number, number], canvasW: number, canvasH: number): 'close' | 'medium' | 'far' {
+  const area = (bbox[2] * bbox[3]) / (canvasW * canvasH);
+  if (area > 0.18) return 'close';
+  if (area > 0.06) return 'medium';
+  return 'far';
+}
+
+function proximityColor(p: 'close' | 'medium' | 'far') {
+  if (p === 'close') return 'hsl(0,90%,55%)';
+  if (p === 'medium') return 'hsl(35,95%,55%)';
+  return 'hsl(150,80%,50%)';
 }
 
 export default function LiveDetect() {
@@ -19,6 +41,7 @@ export default function LiveDetect() {
   const [modelLoading, setModelLoading] = useState(true);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [detections, setDetections] = useState<DetectedItem[]>([]);
+  const [obstacleWarning, setObstacleWarning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -29,7 +52,6 @@ export default function LiveDetect() {
   const lastSpokenRef = useRef<string>('');
   const speakIntervalRef = useRef<number>(0);
 
-  // Load model on mount
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -43,11 +65,22 @@ export default function LiveDetect() {
     return () => { cancelled = true; };
   }, []);
 
-  // Voice feedback at intervals (every 2.5s to avoid spam)
   useEffect(() => {
     if (!voiceEnabled || !cameraActive) return;
     speakIntervalRef.current = window.setInterval(() => {
       if (detections.length === 0) return;
+
+      // Check for close obstacles first
+      const closeItems = detections.filter(d => d.proximity === 'close' && OBSTACLE_CLASSES.has(d.name));
+      if (closeItems.length > 0) {
+        const warning = `Warning! ${buildDetectionSummary(closeItems.map(d => d.name))} very close ahead.`;
+        if (warning !== lastSpokenRef.current) {
+          lastSpokenRef.current = warning;
+          speak(warning, 1.1);
+        }
+        return;
+      }
+
       const summary = buildDetectionSummary(detections.map(d => d.name));
       if (summary !== lastSpokenRef.current) {
         lastSpokenRef.current = summary;
@@ -76,27 +109,38 @@ export default function LiveDetect() {
 
     const predictions = await modelRef.current.detect(video);
 
-    // Draw bounding boxes
+    let hasCloseObstacle = false;
+
     predictions.forEach((p) => {
       const [x, y, w, h] = p.bbox;
-      ctx.strokeStyle = 'hsl(150, 80%, 50%)';
-      ctx.lineWidth = Math.max(2, Math.min(video.videoWidth, video.videoHeight) * 0.004);
+      const prox = getProximity(p.bbox as [number, number, number, number], canvas.width, canvas.height);
+      const color = proximityColor(prox);
+
+      if (prox === 'close' && OBSTACLE_CLASSES.has(p.class)) hasCloseObstacle = true;
+
+      const lineW = prox === 'close' ? 4 : 2;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(lineW, Math.min(video.videoWidth, video.videoHeight) * 0.004);
       ctx.strokeRect(x, y, w, h);
 
-      const label = `${p.class} (${Math.round(p.score * 100)}%)`;
+      // Proximity badge
+      const proxLabel = prox === 'close' ? '⚠ CLOSE' : prox === 'medium' ? 'MEDIUM' : 'FAR';
+      const label = `${p.class} (${Math.round(p.score * 100)}%) ${proxLabel}`;
       const fontSize = Math.max(12, Math.min(video.videoWidth, video.videoHeight) * 0.022);
       ctx.font = `bold ${fontSize}px Inter, sans-serif`;
       const textW = ctx.measureText(label).width;
-      ctx.fillStyle = 'hsl(150, 80%, 50%)';
+      ctx.fillStyle = color;
       ctx.fillRect(x, y - fontSize - 6, textW + 10, fontSize + 6);
-      ctx.fillStyle = '#000';
+      ctx.fillStyle = prox === 'close' ? '#fff' : '#000';
       ctx.fillText(label, x + 5, y - 5);
     });
 
+    setObstacleWarning(hasCloseObstacle);
     setDetections(predictions.map(p => ({
       name: p.class,
       confidence: Math.round(p.score * 100) / 100,
       bbox: p.bbox as [number, number, number, number],
+      proximity: getProximity(p.bbox as [number, number, number, number], canvas.width, canvas.height),
     })));
 
     animFrameRef.current = requestAnimationFrame(detectFrame);
@@ -128,6 +172,7 @@ export default function LiveDetect() {
     streamRef.current = null;
     setCameraActive(false);
     setDetections([]);
+    setObstacleWarning(false);
     stopSpeaking();
     lastSpokenRef.current = '';
     if (canvasRef.current) {
@@ -136,7 +181,6 @@ export default function LiveDetect() {
     }
   }, []);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       cancelAnimationFrame(animFrameRef.current);
@@ -152,7 +196,7 @@ export default function LiveDetect() {
     <div className="max-w-4xl mx-auto px-4 py-10">
       <h1 className="text-3xl font-bold text-foreground mb-2">Live Object Detection</h1>
       <p className="text-muted-foreground mb-8">
-        Use your camera to detect objects in real-time with voice feedback
+        Real-time detection with obstacle proximity warnings and voice feedback
       </p>
 
       {modelLoading && (
@@ -160,6 +204,15 @@ export default function LiveDetect() {
           <CardContent className="p-6 flex items-center gap-3">
             <Loader2 className="w-5 h-5 animate-spin text-primary" />
             <span className="text-sm text-muted-foreground">Loading AI model…</span>
+          </CardContent>
+        </Card>
+      )}
+
+      {obstacleWarning && cameraActive && (
+        <Card className="mb-4 border-destructive" role="alert" aria-live="assertive">
+          <CardContent className="p-4 flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 text-destructive animate-pulse" />
+            <span className="font-semibold text-destructive">⚠ Obstacle very close ahead! Proceed with caution.</span>
           </CardContent>
         </Card>
       )}
@@ -196,7 +249,22 @@ export default function LiveDetect() {
         </CardContent>
       </Card>
 
-      {/* Controls */}
+      {/* Proximity legend */}
+      {cameraActive && (
+        <div className="flex gap-4 mb-4 text-xs flex-wrap">
+          {[
+            { color: 'bg-destructive', label: '⚠ Close — danger zone' },
+            { color: 'bg-accent', label: 'Medium — caution' },
+            { color: 'bg-secondary', label: 'Far — clear' },
+          ].map(({ color, label }) => (
+            <div key={label} className="flex items-center gap-1.5">
+              <span className={`w-3 h-3 rounded-full ${color}`} />
+              <span className="text-muted-foreground">{label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="flex flex-wrap gap-3 mb-6">
         {!cameraActive ? (
           <Button onClick={startCamera} disabled={modelLoading}>
@@ -220,7 +288,6 @@ export default function LiveDetect() {
         </Button>
       </div>
 
-      {/* Live detections list */}
       {cameraActive && detections.length > 0 && (
         <Card>
           <CardContent className="p-6">
@@ -231,13 +298,25 @@ export default function LiveDetect() {
               {detections.map((d, i) => (
                 <div
                   key={`${d.name}-${i}`}
-                  className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
+                  className={`flex items-center justify-between p-3 rounded-lg ${d.proximity === 'close' ? 'bg-destructive/10' : 'bg-muted/50'}`}
                   role="listitem"
                 >
-                  <span className="font-medium text-foreground capitalize">{d.name}</span>
-                  <span className="text-sm font-mono px-2 py-1 rounded bg-primary/10 text-primary">
-                    {Math.round(d.confidence * 100)}%
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {d.proximity === 'close' && <AlertTriangle className="w-4 h-4 text-destructive" />}
+                    <span className="font-medium text-foreground capitalize">{d.name}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${
+                      d.proximity === 'close' ? 'bg-destructive/20 text-destructive' :
+                      d.proximity === 'medium' ? 'bg-accent/20 text-accent-foreground' :
+                      'bg-secondary/20 text-secondary'
+                    }`}>
+                      {d.proximity}
+                    </span>
+                    <span className="text-sm font-mono px-2 py-1 rounded bg-primary/10 text-primary">
+                      {Math.round(d.confidence * 100)}%
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>

@@ -12,6 +12,11 @@ import Dashboard from "./pages/Dashboard";
 import Detect from "./pages/Detect";
 import LiveDetect from "./pages/LiveDetect";
 import DetectionHistory from "./pages/DetectionHistory";
+import TextReader from "./pages/TextReader";
+import Emergency from "./pages/Emergency";
+import Navigation from "./pages/Navigation";
+import FaceDetect from "./pages/FaceDetect";
+import CurrencyDetect from "./pages/CurrencyDetect";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -38,6 +43,11 @@ const App = () => (
               <Route path="/detect" element={<ProtectedRoute><Detect /></ProtectedRoute>} />
               <Route path="/live-detect" element={<ProtectedRoute><LiveDetect /></ProtectedRoute>} />
               <Route path="/history" element={<ProtectedRoute><DetectionHistory /></ProtectedRoute>} />
+              <Route path="/text-reader" element={<ProtectedRoute><TextReader /></ProtectedRoute>} />
+              <Route path="/emergency" element={<ProtectedRoute><Emergency /></ProtectedRoute>} />
+              <Route path="/navigation" element={<ProtectedRoute><Navigation /></ProtectedRoute>} />
+              <Route path="/face-detect" element={<ProtectedRoute><FaceDetect /></ProtectedRoute>} />
+              <Route path="/currency" element={<ProtectedRoute><CurrencyDetect /></ProtectedRoute>} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </AppLayout>

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useAuth } from '@/hooks/useAuth';
-import { speak, stopSpeaking, buildDetectionSummary } from '@/lib/speech';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { speak, stopSpeaking, buildDetectionSummary, buildProximityWarning } from '@/lib/speech';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Video, VideoOff, Volume2, VolumeX, Loader2, AlertTriangle } from 'lucide-react';
@@ -41,6 +42,7 @@ function proximityColor(p: 'close' | 'medium' | 'far') {
 
 export default function LiveDetect() {
   const { user } = useAuth();
+  const { lang } = useLanguage();
   const [cameraActive, setCameraActive] = useState(false);
   const [modelLoading, setModelLoading] = useState(true);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
@@ -60,6 +62,13 @@ export default function LiveDetect() {
   const cameraActiveRef = useRef(false);
   const lastSpokenRef = useRef<string>('');
   const speakIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const langRef = useRef(lang);
+
+  // Keep langRef in sync
+  useEffect(() => {
+    langRef.current = lang;
+    lastSpokenRef.current = ''; // reset so next interval re-announces in new lang
+  }, [lang]);
 
   // Load COCO-SSD model once on mount
   useEffect(() => {
@@ -86,24 +95,25 @@ export default function LiveDetect() {
       if (!voiceEnabledRef.current || !cameraActiveRef.current) return;
       const items = detectionsRef.current;
       if (items.length === 0) return;
+      const currentLang = langRef.current;
 
       // Prioritise close obstacle warnings
       const closeItems = items.filter(
         d => d.proximity === 'close' && OBSTACLE_CLASSES.has(d.name),
       );
       if (closeItems.length > 0) {
-        const warning = `Warning! ${buildDetectionSummary(closeItems.map(d => d.name))} very close ahead.`;
+        const warning = buildProximityWarning(closeItems.map(d => d.name), currentLang);
         if (warning !== lastSpokenRef.current) {
           lastSpokenRef.current = warning;
-          speak(warning, 1.1);
+          speak(warning, 1.1, currentLang);
         }
         return;
       }
 
-      const summary = buildDetectionSummary(items.map(d => d.name));
+      const summary = buildDetectionSummary(items.map(d => d.name), currentLang);
       if (summary && summary !== lastSpokenRef.current) {
         lastSpokenRef.current = summary;
-        speak(summary, 0.95);
+        speak(summary, 0.95, currentLang);
       }
     }, 2500);
 
@@ -170,7 +180,6 @@ export default function LiveDetect() {
       });
     });
 
-    // Update ref immediately (no re-render delay) so interval always has fresh data
     detectionsRef.current = newDetections;
     setDetections(newDetections);
     setObstacleWarning(hasCloseObstacle);
@@ -195,7 +204,10 @@ export default function LiveDetect() {
           setCameraActive(true);
           detectFrame();
           if (voiceEnabledRef.current) {
-            setTimeout(() => speak('Camera started. Scanning for objects.'), 300);
+            const msg = langRef.current === 'ta-IN'
+              ? 'கேமரா தொடங்கியது. பொருட்களை ஸ்கேன் செய்கிறது.'
+              : 'Camera started. Scanning for objects.';
+            setTimeout(() => speak(msg, 0.95, langRef.current), 300);
           }
         };
       }
@@ -232,12 +244,18 @@ export default function LiveDetect() {
 
   if (!user) return null;
 
+  const isTamil = lang === 'ta-IN';
+
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
       <div className="mb-6">
-        <h1 className="text-3xl font-bold text-foreground mb-1">Live Object Detection</h1>
+        <h1 className="text-3xl font-bold text-foreground mb-1">
+          {isTamil ? 'நேரடி பொருள் கண்டறிதல்' : 'Live Object Detection'}
+        </h1>
         <p className="text-muted-foreground text-sm">
-          Real-time AI detection with voice announcements every 2.5 seconds
+          {isTamil
+            ? 'ஒவ்வொரு 2.5 வினாடிக்கும் குரல் அறிவிப்புடன் நேரடி AI கண்டறிதல்'
+            : 'Real-time AI detection with voice announcements every 2.5 seconds'}
         </p>
       </div>
 
@@ -247,8 +265,12 @@ export default function LiveDetect() {
           <CardContent className="p-5 flex items-center gap-3">
             <Loader2 className="w-5 h-5 animate-spin text-primary flex-shrink-0" />
             <div>
-              <p className="text-sm font-medium text-foreground">Loading AI model…</p>
-              <p className="text-xs text-muted-foreground">First load may take 10–20 seconds</p>
+              <p className="text-sm font-medium text-foreground">
+                {isTamil ? 'AI மாடல் ஏற்றுகிறது…' : 'Loading AI model…'}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {isTamil ? 'முதல் ஏற்றம் 10–20 வினாடிகள் ஆகலாம்' : 'First load may take 10–20 seconds'}
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -260,7 +282,9 @@ export default function LiveDetect() {
           <CardContent className="p-4 flex items-center gap-3">
             <AlertTriangle className="w-6 h-6 text-destructive animate-pulse flex-shrink-0" />
             <span className="font-bold text-destructive text-sm">
-              ⚠ Obstacle very close ahead! Proceed with caution.
+              {isTamil
+                ? '⚠ தடை மிக நெருக்கமாக உள்ளது! கவனமாக முன்னேறவும்.'
+                : '⚠ Obstacle very close ahead! Proceed with caution.'}
             </span>
           </CardContent>
         </Card>
@@ -298,8 +322,12 @@ export default function LiveDetect() {
                 <div className="w-20 h-20 rounded-full bg-muted-foreground/10 flex items-center justify-center">
                   <Video className="w-10 h-10 opacity-40" />
                 </div>
-                <p className="text-sm font-medium">Press Start Camera to begin detection</p>
-                <p className="text-xs opacity-60">Allow camera permission when prompted</p>
+                <p className="text-sm font-medium">
+                  {isTamil ? 'கேமரா தொடங்க அழுத்தவும்' : 'Press Start Camera to begin detection'}
+                </p>
+                <p className="text-xs opacity-60">
+                  {isTamil ? 'கேமரா அனுமதி வழங்கவும்' : 'Allow camera permission when prompted'}
+                </p>
               </div>
             )}
             {/* Live badge */}
@@ -312,16 +340,22 @@ export default function LiveDetect() {
             {/* Object count badge */}
             {cameraActive && (
               <div className="absolute top-3 right-3 bg-black/70 text-white text-xs font-bold px-2.5 py-1 rounded-full backdrop-blur-sm">
-                {detections.length} object{detections.length !== 1 ? 's' : ''}
+                {detections.length} {isTamil ? 'பொருட்கள்' : `object${detections.length !== 1 ? 's' : ''}`}
               </div>
             )}
-            {/* Voice badge */}
+            {/* Voice + lang badge */}
             {cameraActive && (
               <div className={`absolute bottom-3 right-3 flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full backdrop-blur-sm ${
                 voiceEnabled ? 'bg-primary/80 text-primary-foreground' : 'bg-black/60 text-white/60'
               }`}>
                 {voiceEnabled ? <Volume2 className="w-3 h-3" /> : <VolumeX className="w-3 h-3" />}
-                {voiceEnabled ? 'Voice On' : 'Voice Off'}
+                {voiceEnabled ? (isTamil ? 'குரல் இயக்கம்' : 'Voice On') : (isTamil ? 'குரல் நிறுத்தம்' : 'Voice Off')}
+              </div>
+            )}
+            {/* Language badge */}
+            {cameraActive && (
+              <div className="absolute bottom-3 left-3 bg-black/70 text-white text-xs font-bold px-2.5 py-1 rounded-full backdrop-blur-sm">
+                {isTamil ? '🗣 தமிழ்' : '🗣 EN'}
               </div>
             )}
           </div>
@@ -338,11 +372,14 @@ export default function LiveDetect() {
             className="flex-1 sm:flex-none"
           >
             <Video className="w-4 h-4 mr-2" />
-            {modelLoading ? 'Loading Model…' : 'Start Camera'}
+            {modelLoading
+              ? (isTamil ? 'மாடல் ஏற்றுகிறது…' : 'Loading Model…')
+              : (isTamil ? 'கேமரா தொடங்கு' : 'Start Camera')}
           </Button>
         ) : (
           <Button onClick={stopCamera} variant="destructive" size="lg" className="flex-1 sm:flex-none">
-            <VideoOff className="w-4 h-4 mr-2" /> Stop Camera
+            <VideoOff className="w-4 h-4 mr-2" />
+            {isTamil ? 'கேமரா நிறுத்து' : 'Stop Camera'}
           </Button>
         )}
         <Button
@@ -354,13 +391,17 @@ export default function LiveDetect() {
             setVoiceEnabled(next);
             voiceEnabledRef.current = next;
             if (!next) stopSpeaking();
-            else speak('Voice feedback enabled.');
+            else speak(
+              isTamil ? 'குரல் கருத்து இயக்கப்பட்டது.' : 'Voice feedback enabled.',
+              0.95,
+              lang,
+            );
           }}
           aria-label={voiceEnabled ? 'Disable voice feedback' : 'Enable voice feedback'}
         >
           {voiceEnabled
-            ? <><Volume2 className="w-4 h-4 mr-2" /> Voice On</>
-            : <><VolumeX className="w-4 h-4 mr-2" /> Voice Off</>}
+            ? <><Volume2 className="w-4 h-4 mr-2" />{isTamil ? 'குரல் இயக்கம்' : 'Voice On'}</>
+            : <><VolumeX className="w-4 h-4 mr-2" />{isTamil ? 'குரல் நிறுத்தம்' : 'Voice Off'}</>}
         </Button>
       </div>
 
@@ -369,15 +410,15 @@ export default function LiveDetect() {
         <div className="flex flex-wrap gap-4 mb-5 px-1 text-xs">
           <div className="flex items-center gap-1.5">
             <span className="w-3 h-3 rounded-full bg-destructive flex-shrink-0" />
-            <span className="text-muted-foreground">⚠ Close — danger</span>
+            <span className="text-muted-foreground">{isTamil ? '⚠ நெருக்கம் — ஆபத்து' : '⚠ Close — danger'}</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="w-3 h-3 rounded-full bg-accent flex-shrink-0" />
-            <span className="text-muted-foreground">Medium — caution</span>
+            <span className="text-muted-foreground">{isTamil ? 'நடுத்தரம் — எச்சரிக்கை' : 'Medium — caution'}</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="w-3 h-3 rounded-full bg-secondary flex-shrink-0" />
-            <span className="text-muted-foreground">Far — clear</span>
+            <span className="text-muted-foreground">{isTamil ? 'தொலைவு — தெளிவு' : 'Far — clear'}</span>
           </div>
         </div>
       )}
@@ -387,7 +428,7 @@ export default function LiveDetect() {
         <Card>
           <CardContent className="p-5">
             <h2 className="text-base font-semibold text-foreground mb-3">
-              Detected Objects ({detections.length})
+              {isTamil ? `கண்டறிந்த பொருட்கள் (${detections.length})` : `Detected Objects (${detections.length})`}
             </h2>
             <div
               className="space-y-2"
@@ -419,7 +460,11 @@ export default function LiveDetect() {
                           : 'bg-secondary/20 text-secondary'
                       }`}
                     >
-                      {d.proximity.toUpperCase()}
+                      {d.proximity === 'close'
+                        ? (isTamil ? 'நெருக்கம்' : 'CLOSE')
+                        : d.proximity === 'medium'
+                        ? (isTamil ? 'நடுத்தரம்' : 'MEDIUM')
+                        : (isTamil ? 'தொலைவு' : 'FAR')}
                     </span>
                     <span className="text-sm font-mono px-2 py-0.5 rounded bg-primary/10 text-primary">
                       {Math.round(d.confidence * 100)}%
@@ -436,7 +481,9 @@ export default function LiveDetect() {
         <Card>
           <CardContent className="p-6 text-center text-muted-foreground text-sm">
             <Video className="w-8 h-8 opacity-30 mx-auto mb-2" />
-            No objects detected yet — point the camera at something.
+            {isTamil
+              ? 'இன்னும் பொருட்கள் கண்டறியவில்லை — கேமராவை ஒரு பொருளை நோக்கி வையுங்கள்.'
+              : 'No objects detected yet — point the camera at something.'}
           </CardContent>
         </Card>
       )}

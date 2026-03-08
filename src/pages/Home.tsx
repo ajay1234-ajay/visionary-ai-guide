@@ -3,9 +3,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import {
   Eye, Video, Upload, FileText, Users, Banknote,
-  Navigation2, Siren, ArrowRight, Volume2, Zap, Shield
+  Navigation2, Siren, ArrowRight, Volume2, Zap, Shield, Mic
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
+import { useLanguage } from '@/contexts/LanguageContext';
 
 const FEATURE_CARDS = [
   {
@@ -79,8 +80,23 @@ const HIGHLIGHTS = [
   { icon: Shield, label: '100% Private', desc: 'All processing is on-device — nothing leaves your browser' },
 ];
 
+const VOICE_COMMANDS = [
+  { en: '"open camera" / "start detection"', ta: '"கேமரா திற"', action: 'Live Camera' },
+  { en: '"read text" / "ocr"', ta: '"உரை படி"', action: 'Text Reader' },
+  { en: '"navigation" / "gps"', ta: '"வழிகாட்டுதல்"', action: 'GPS Navigation' },
+  { en: '"emergency" / "sos"', ta: '"அவசரநிலை"', action: 'Emergency SOS' },
+  { en: '"go home" / "home page"', ta: '"முகப்பு"', action: 'Home Page' },
+  { en: '"dashboard"', ta: '"டாஷ்போர்டு"', action: 'Dashboard' },
+  { en: '"face detect"', ta: '"முக கண்டறிதல்"', action: 'Face Detection' },
+  { en: '"currency" / "money"', ta: '"நாணயம்"', action: 'Currency' },
+  { en: '"detect image"', ta: '"படம் கண்டறி"', action: 'Image Detect' },
+  { en: '"history"', ta: '"வரலாறு"', action: 'History' },
+  { en: '"help" / "commands"', ta: '"உதவி"', action: 'List commands' },
+];
+
 export default function Home() {
   const { user } = useAuth();
+  const { isTamil } = useLanguage();
 
   return (
     <div className="flex flex-col min-h-screen">
@@ -229,6 +245,56 @@ export default function Home() {
               </Link>
             ))}
           </div>
+        </div>
+      </section>
+
+      {/* ─── Voice Commands Reference ────────────────────── */}
+      <section className="px-4 pb-12" aria-labelledby="voice-commands-heading">
+        <div className="max-w-5xl mx-auto">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-xl bg-destructive/10 flex items-center justify-center flex-shrink-0">
+              <Mic className="w-5 h-5 text-destructive" />
+            </div>
+            <div>
+              <h2 id="voice-commands-heading" className="text-2xl font-bold text-foreground">
+                {isTamil ? 'குரல் கட்டளைகள்' : 'Voice Commands'}
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                {isTamil
+                  ? 'தலைப்பில் உள்ள குரல் பொத்தானை அழுத்தி, கீழே உள்ள எந்த கட்டளையையும் சொல்லுங்கள்'
+                  : 'Press the Voice button in the header, then speak any command below'}
+              </p>
+            </div>
+          </div>
+          <Card className="border-destructive/20 bg-destructive/3">
+            <CardContent className="p-5">
+              <div className="grid sm:grid-cols-2 gap-2">
+                {VOICE_COMMANDS.map((cmd) => (
+                  <div
+                    key={cmd.en}
+                    className="flex items-start justify-between gap-3 p-3 rounded-lg bg-background/70 border border-border/60"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-foreground font-mono truncate">
+                        {isTamil ? cmd.ta : cmd.en}
+                      </p>
+                      {isTamil && (
+                        <p className="text-xs text-muted-foreground font-mono mt-0.5 truncate">{cmd.en}</p>
+                      )}
+                    </div>
+                    <span className="text-xs px-2 py-0.5 rounded bg-primary/10 text-primary font-medium whitespace-nowrap flex-shrink-0">
+                      {cmd.action}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground mt-4 text-center">
+                {isTamil
+                  ? '💡 "உதவி" என்று சொல்லினால் அனைத்து கட்டளைகளும் சத்தமாக படிக்கப்படும்'
+                  : '💡 Say "help" at any time and all commands will be read aloud to you'}
+              </p>
+            </CardContent>
+          </Card>
         </div>
       </section>
 

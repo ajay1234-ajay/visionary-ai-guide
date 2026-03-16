@@ -6,6 +6,8 @@ export interface RouteStep {
   distance: string;
   maneuver: string; // osrm maneuver type
   modifier?: string; // left / right / straight / slight left / etc
+  lat?: number;      // waypoint latitude for proximity tracking
+  lng?: number;      // waypoint longitude for proximity tracking
 }
 
 function StepIcon({ maneuver, modifier }: { maneuver: string; modifier?: string }) {

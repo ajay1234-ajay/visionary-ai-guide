@@ -1,8 +1,11 @@
-import { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense, useCallback } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { speak, stopSpeaking } from '@/lib/speech';
-import { fetchRoute, geocodeDestination, voiceInstruction } from '@/lib/routing';
+import {
+  fetchRoute, geocodeDestination, voiceInstruction,
+  haversineMetres, isOffRoute, fmtDistance,
+} from '@/lib/routing';
 import type { RouteResult } from '@/lib/routing';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,10 +14,10 @@ import RouteSteps from '@/components/navigation/RouteSteps';
 import StreetViewCard from '@/components/navigation/StreetViewCard';
 import {
   MapPin, Navigation2, Volume2, VolumeX, Loader2, RefreshCw,
-  Search, Route, AlertTriangle, ChevronRight, ChevronLeft, CheckCircle2,
+  Search, Route, AlertTriangle, ChevronRight, ChevronLeft,
+  CheckCircle2, AlertCircle,
 } from 'lucide-react';
 
-// Lazy-load the Leaflet map to avoid SSR issues
 const MapView = lazy(() => import('@/components/navigation/MapView'));
 
 interface LocationInfo {
@@ -25,31 +28,50 @@ interface LocationInfo {
   country?: string;
 }
 
+// Advance the step when user is within this distance of the waypoint (metres)
+const STEP_ADVANCE_M = 30;
+// Warn user when off-route by this distance (metres)
+const OFF_ROUTE_M = 60;
+// Announce "turn in Xm" when within this distance of the next waypoint
+const ADVANCE_WARN_M = 80;
+
 export default function Navigation() {
   const { user } = useAuth();
   const { lang, isTamil } = useLanguage();
 
-  // Location state
   const [location, setLocation] = useState<LocationInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Navigation / routing state
   const [destination, setDestination] = useState('');
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeResult, setRouteResult] = useState<RouteResult | null>(null);
   const [destAddress, setDestAddress] = useState('');
   const [activeStep, setActiveStep] = useState(0);
   const [navigationStarted, setNavigationStarted] = useState(false);
+  const [offRoute, setOffRoute] = useState(false);
+  const [distToNext, setDistToNext] = useState<number | null>(null);
 
-  // Voice & tracking
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [tracking, setTracking] = useState(false);
+
   const watchIdRef = useRef<number | null>(null);
   const lastAnnouncedRef = useRef<string>('');
   const stepAnnouncedRef = useRef<number>(-1);
+  const advanceWarnedRef = useRef<number>(-1);
+  const offRouteWarnedRef = useRef(false);
+  const routeResultRef = useRef<RouteResult | null>(null);
+  const activeStepRef = useRef(0);
+  const navStartedRef = useRef(false);
+  const voiceEnabledRef = useRef(true);
 
-  // ─── Geocode + reverse geocode helpers ───────────────────────────────────
+  // Keep refs in sync
+  useEffect(() => { routeResultRef.current = routeResult; }, [routeResult]);
+  useEffect(() => { activeStepRef.current = activeStep; }, [activeStep]);
+  useEffect(() => { navStartedRef.current = navigationStarted; }, [navigationStarted]);
+  useEffect(() => { voiceEnabledRef.current = voiceEnabled; }, [voiceEnabled]);
+
+  // ─── Reverse geocode ────────────────────────────────────────────────────
   const reverseGeocode = async (lat: number, lng: number): Promise<LocationInfo> => {
     const res = await fetch(
       `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
@@ -68,7 +90,96 @@ export default function Navigation() {
     return { lat, lng, address, city, country };
   };
 
-  // ─── Get current location ────────────────────────────────────────────────
+  // ─── GPS position handler (shared by one-shot + watchPosition) ──────────
+  const handlePosition = useCallback(async (pos: GeolocationPosition) => {
+    const { latitude, longitude, accuracy } = pos.coords;
+    // Ignore very inaccurate fixes (>150m)
+    if (accuracy > 150) return;
+
+    try {
+      const info = await reverseGeocode(latitude, longitude);
+      setLocation(info);
+
+      if (voiceEnabledRef.current) {
+        const msg = isTamil
+          ? `நீங்கள் ${info.address} இல் உள்ளீர்கள்.`
+          : `You are at ${info.address}.`;
+        if (msg !== lastAnnouncedRef.current) {
+          lastAnnouncedRef.current = msg;
+          speak(msg, 0.9, lang);
+        }
+      }
+
+      // ── Navigation proximity logic ──────────────────────────────────
+      const rr = routeResultRef.current;
+      if (!navStartedRef.current || !rr) return;
+
+      const curStep = activeStepRef.current;
+      const steps = rr.steps;
+
+      // Off-route check
+      const offR = isOffRoute(latitude, longitude, rr.routeCoords, OFF_ROUTE_M);
+      setOffRoute(offR);
+      if (offR && !offRouteWarnedRef.current) {
+        offRouteWarnedRef.current = true;
+        if (voiceEnabledRef.current) {
+          speak(
+            isTamil
+              ? 'நீங்கள் வழியிலிருந்து விலகியுள்ளீர்கள். வழியை மீண்டும் கணக்கிடுகிறோம்.'
+              : 'You are off route. Recalculating…',
+            0.9, lang,
+          );
+        }
+      } else if (!offR) {
+        offRouteWarnedRef.current = false;
+      }
+
+      // Distance to next step waypoint
+      const nextStepIdx = curStep < steps.length - 1 ? curStep + 1 : curStep;
+      const nextStep = steps[nextStepIdx];
+      if (nextStep?.lat !== undefined && nextStep?.lng !== undefined) {
+        const dist = haversineMetres(latitude, longitude, nextStep.lat, nextStep.lng);
+        setDistToNext(dist);
+
+        // Advance warning ("Turn left in 80m")
+        if (
+          dist <= ADVANCE_WARN_M &&
+          advanceWarnedRef.current !== nextStepIdx &&
+          nextStepIdx !== curStep
+        ) {
+          advanceWarnedRef.current = nextStepIdx;
+          if (voiceEnabledRef.current) {
+            const inXm = isTamil ? `${fmtDistance(dist)} தூரத்தில்` : `in ${fmtDistance(dist)}`;
+            speak(`${inXm} — ${voiceInstruction(nextStep, lang)}`, 0.9, lang);
+          }
+        }
+
+        // Auto-advance when within STEP_ADVANCE_M
+        if (dist <= STEP_ADVANCE_M && nextStepIdx > curStep) {
+          const newStep = nextStepIdx;
+          setActiveStep(newStep);
+          activeStepRef.current = newStep;
+          if (voiceEnabledRef.current && stepAnnouncedRef.current !== newStep) {
+            stepAnnouncedRef.current = newStep;
+            const s = steps[newStep];
+            if (s.maneuver === 'arrive') {
+              speak(
+                isTamil ? 'நீங்கள் உங்கள் இலக்கை அடைந்துவிட்டீர்கள்!' : 'You have reached your destination!',
+                0.9, lang,
+              );
+            } else {
+              speak(voiceInstruction(s, lang), 0.9, lang);
+            }
+          }
+        }
+      }
+    } catch {
+      setLocation({ lat: latitude, lng: longitude, address: `${latitude.toFixed(5)}, ${longitude.toFixed(5)}` });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTamil, lang]);
+
+  // ─── Get current location (one-shot) ───────────────────────────────────
   const getLocation = async () => {
     setError(null);
     setLoading(true);
@@ -78,49 +189,35 @@ export default function Navigation() {
       return;
     }
     navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        try {
-          const info = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
-          setLocation(info);
-          if (voiceEnabled) {
-            const msg = isTamil
-              ? `நீங்கள் தற்போது ${info.address} இல் உள்ளீர்கள்.`
-              : `You are currently at ${info.address}.`;
-            if (msg !== lastAnnouncedRef.current) {
-              lastAnnouncedRef.current = msg;
-              speak(msg, 0.9, lang);
-            }
-          }
-        } catch {
-          setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude, address: `${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}` });
-        }
-        setLoading(false);
-      },
+      async (pos) => { await handlePosition(pos); setLoading(false); },
       (err) => {
         setError(`${isTamil ? 'இருப்பிடம் கிடைக்கவில்லை' : 'Could not get location'}: ${err.message}`);
         setLoading(false);
       },
-      { enableHighAccuracy: true, timeout: 15000 },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 },
     );
   };
 
-  // ─── Route calculation ───────────────────────────────────────────────────
+  // ─── Route calculation ──────────────────────────────────────────────────
   const calculateRoute = async () => {
     if (!destination.trim() || !location) return;
     setRouteLoading(true);
     setError(null);
     setRouteResult(null);
     setActiveStep(0);
+    setOffRoute(false);
+    setDistToNext(null);
     stepAnnouncedRef.current = -1;
+    advanceWarnedRef.current = -1;
+    offRouteWarnedRef.current = false;
     try {
-      // Geocode destination
       const geo = await geocodeDestination(destination, isTamil ? 'ta' : 'en');
       if (!geo) throw new Error(isTamil ? 'இலக்கு கண்டுபிடிக்கவில்லை' : 'Destination not found');
       setDestAddress(geo.display);
 
-      // Fetch route
       const result = await fetchRoute(location.lat, location.lng, geo.lat, geo.lng, lang);
       setRouteResult(result);
+      routeResultRef.current = result;
 
       if (voiceEnabled) {
         const msg = isTamil
@@ -137,29 +234,43 @@ export default function Navigation() {
     }
   };
 
-  // ─── Navigation step control ─────────────────────────────────────────────
+  // ─── Navigation controls ────────────────────────────────────────────────
   const startNavigation = () => {
     if (!routeResult) return;
     setNavigationStarted(true);
+    navStartedRef.current = true;
     setActiveStep(0);
+    activeStepRef.current = 0;
     stepAnnouncedRef.current = -1;
+    advanceWarnedRef.current = -1;
+    offRouteWarnedRef.current = false;
     if (voiceEnabled) {
       const first = routeResult.steps[0];
-      speak(first ? voiceInstruction(first, lang) : (isTamil ? 'வழிகாட்டுதல் தொடங்கியது.' : 'Navigation started.'), 0.9, lang);
+      speak(
+        first ? voiceInstruction(first, lang) : (isTamil ? 'வழிகாட்டுதல் தொடங்கியது.' : 'Navigation started.'),
+        0.9, lang,
+      );
       stepAnnouncedRef.current = 0;
     }
+    // Auto-start live GPS tracking
+    startTracking();
   };
 
   const stopNavigation = () => {
     setNavigationStarted(false);
+    navStartedRef.current = false;
+    setOffRoute(false);
+    setDistToNext(null);
     stopSpeaking();
     if (voiceEnabled) speak(isTamil ? 'வழிகாட்டுதல் நிறுத்தப்பட்டது.' : 'Navigation stopped.', 0.9, lang);
+    stopTracking();
   };
 
   const nextStep = () => {
     if (!routeResult) return;
     const next = Math.min(activeStep + 1, routeResult.steps.length - 1);
     setActiveStep(next);
+    activeStepRef.current = next;
     if (voiceEnabled && stepAnnouncedRef.current !== next) {
       stepAnnouncedRef.current = next;
       const step = routeResult.steps[next];
@@ -174,9 +285,8 @@ export default function Navigation() {
   const prevStep = () => {
     const prev = Math.max(activeStep - 1, 0);
     setActiveStep(prev);
-    if (voiceEnabled && routeResult) {
-      speak(voiceInstruction(routeResult.steps[prev], lang), 0.9, lang);
-    }
+    activeStepRef.current = prev;
+    if (voiceEnabled && routeResult) speak(voiceInstruction(routeResult.steps[prev], lang), 0.9, lang);
   };
 
   const readCurrentStep = () => {
@@ -184,30 +294,14 @@ export default function Navigation() {
     speak(voiceInstruction(routeResult.steps[activeStep], lang), 0.9, lang);
   };
 
-  // ─── Live tracking ───────────────────────────────────────────────────────
+  // ─── Live tracking ──────────────────────────────────────────────────────
   const startTracking = () => {
-    if (!navigator.geolocation) return;
+    if (!navigator.geolocation || watchIdRef.current !== null) return;
     setTracking(true);
     watchIdRef.current = navigator.geolocation.watchPosition(
-      async (pos) => {
-        try {
-          const info = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
-          setLocation(info);
-          if (voiceEnabled) {
-            const msg = isTamil
-              ? `நீங்கள் ${info.address} இல் உள்ளீர்கள்.`
-              : `You are at ${info.address}.`;
-            if (msg !== lastAnnouncedRef.current) {
-              lastAnnouncedRef.current = msg;
-              speak(msg, 0.9, lang);
-            }
-          }
-        } catch {
-          setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude, address: `${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}` });
-        }
-      },
+      handlePosition,
       (err) => setError(err.message),
-      { enableHighAccuracy: true },
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 },
     );
   };
 
@@ -217,16 +311,13 @@ export default function Navigation() {
       watchIdRef.current = null;
     }
     setTracking(false);
-    stopSpeaking();
   };
 
-  // ─── Effects ─────────────────────────────────────────────────────────────
+  // ─── Effects ────────────────────────────────────────────────────────────
   useEffect(() => { lastAnnouncedRef.current = ''; }, [lang]);
-  useEffect(() => {
-    return () => {
-      if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
-      stopSpeaking();
-    };
+  useEffect(() => () => {
+    if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
+    stopSpeaking();
   }, []);
 
   if (!user) return null;
@@ -248,16 +339,16 @@ export default function Navigation() {
         </div>
         <p className="text-muted-foreground ml-13">
           {isTamil
-            ? 'குரல் வழிகாட்டுதலுடன் படிப்படியான வழிமுறைகள்'
-            : 'Step-by-step directions with voice guidance'}
+            ? 'நேரடி GPS கண்காணிப்பு மற்றும் குரல் வழிகாட்டுதல்'
+            : 'Real-time GPS tracking with automatic step advancement & voice guidance'}
         </p>
       </div>
 
-      {/* Voice + Location controls */}
+      {/* Controls */}
       <div className="flex flex-wrap gap-2">
         <Button
           variant="outline"
-          onClick={() => { setVoiceEnabled(v => !v); if (voiceEnabled) stopSpeaking(); }}
+          onClick={() => { setVoiceEnabled(v => !v); voiceEnabledRef.current = !voiceEnabled; if (voiceEnabled) stopSpeaking(); }}
           aria-label={voiceEnabled ? 'Disable voice' : 'Enable voice'}
         >
           {voiceEnabled ? <Volume2 className="w-4 h-4 mr-2" /> : <VolumeX className="w-4 h-4 mr-2" />}
@@ -282,8 +373,21 @@ export default function Navigation() {
       {tracking && (
         <div className="flex items-center gap-2 text-sm text-secondary">
           <span className="w-2 h-2 rounded-full bg-secondary animate-pulse" />
-          {isTamil ? 'உங்கள் இருப்பிடத்தை கண்காணிக்கிறது…' : 'Tracking your location…'}
+          {isTamil ? 'உங்கள் இருப்பிடத்தை கண்காணிக்கிறது…' : 'Live GPS tracking active…'}
         </div>
+      )}
+
+      {/* Off-route warning */}
+      {offRoute && navigationStarted && (
+        <Card className="border-destructive bg-destructive/5">
+          <CardContent className="p-3 flex items-center gap-2 text-destructive text-sm">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <span>{isTamil ? 'நீங்கள் வழியிலிருந்து விலகியுள்ளீர்கள்! வழியை மீண்டும் திட்டமிடவும்.' : 'You appear to be off route! Re-plan or continue.'}</span>
+            <Button size="sm" variant="destructive" className="ml-auto" onClick={calculateRoute} disabled={routeLoading}>
+              {isTamil ? 'மீண்டும் திட்டமிடு' : 'Recalculate'}
+            </Button>
+          </CardContent>
+        </Card>
       )}
 
       {error && (
@@ -315,9 +419,23 @@ export default function Navigation() {
               {location.country && <span className="px-2 py-1 rounded bg-muted">{location.country}</span>}
             </div>
 
+            {/* Distance to next step */}
+            {navigationStarted && distToNext !== null && !isArrived && (
+              <div className="flex items-center gap-2 text-sm text-primary font-medium">
+                <Navigation2 className="w-4 h-4" />
+                {isTamil
+                  ? `அடுத்த திருப்பம் வரை: ${fmtDistance(distToNext)}`
+                  : `Distance to next turn: ${fmtDistance(distToNext)}`}
+              </div>
+            )}
+
             {/* Leaflet Map */}
             <div className="h-56 w-full rounded-lg overflow-hidden border border-border">
-              <Suspense fallback={<div className="h-full w-full bg-muted flex items-center justify-center text-sm text-muted-foreground"><Loader2 className="w-4 h-4 animate-spin mr-2" />Loading map…</div>}>
+              <Suspense fallback={
+                <div className="h-full w-full bg-muted flex items-center justify-center text-sm text-muted-foreground">
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />Loading map…
+                </div>
+              }>
                 <MapView
                   currentLat={location.lat}
                   currentLng={location.lng}
@@ -326,6 +444,7 @@ export default function Navigation() {
                   destLng={routeResult?.destLng}
                   destAddress={destAddress}
                   routeCoords={routeResult?.routeCoords}
+                  activeStepIndex={navigationStarted ? activeStep : undefined}
                 />
               </Suspense>
             </div>
@@ -375,9 +494,9 @@ export default function Navigation() {
             </p>
           )}
 
-          {/* Route summary + navigation controls */}
           {routeResult && (
             <div className="space-y-4 pt-1">
+              {/* Summary badges */}
               <div className="flex flex-wrap gap-3 text-sm">
                 <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 text-primary font-medium">
                   <Route className="w-3.5 h-3.5" />
@@ -415,11 +534,16 @@ export default function Navigation() {
                         {currentStep.distance && (
                           <p className="text-xs text-muted-foreground mt-0.5">{currentStep.distance}</p>
                         )}
+                        {distToNext !== null && !isArrived && (
+                          <p className="text-xs text-primary/70 mt-0.5">
+                            📍 {isTamil ? `அடுத்த: ${fmtDistance(distToNext)}` : `Next turn in ${fmtDistance(distToNext)}`}
+                          </p>
+                        )}
                       </div>
                     </div>
                   )}
 
-                  {/* Step navigation buttons */}
+                  {/* Step buttons */}
                   <div className="flex gap-2">
                     <Button variant="outline" size="sm" onClick={prevStep} disabled={activeStep === 0}>
                       <ChevronLeft className="w-4 h-4" />

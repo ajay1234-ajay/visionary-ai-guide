@@ -398,19 +398,48 @@ export default function CurrencyDetect() {
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-10">
-      <div className="flex items-center gap-3 mb-2">
-        <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center">
-          <Banknote className="w-5 h-5 text-accent" />
+      {/* Header row */}
+      <div className="flex items-start justify-between gap-4 mb-2 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center">
+            <Banknote className="w-5 h-5 text-accent" />
+          </div>
+          <div>
+            <h1 className="text-3xl font-bold text-foreground">
+              {isTamil ? 'நோட்டு கண்டறிதல்' : 'Currency Detection'}
+            </h1>
+            <p className="text-muted-foreground text-sm">
+              {isTamil
+                ? 'நோட்டின் புகைப்படம் எடுக்கவும் — பெயர் மற்றும் மதிப்பு சத்தமாக அறிவிக்கப்படும்'
+                : 'Take a photo of a banknote — the denomination will be identified and read aloud'}
+            </p>
+          </div>
         </div>
-        <h1 className="text-3xl font-bold text-foreground">
-          {isTamil ? 'நோட்டு கண்டறிதல்' : 'Currency Detection'}
-        </h1>
+        {/* Voice command toggle */}
+        {vcSupported && (
+          <button
+            onClick={vcToggle}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold border transition-all select-none ${
+              vcListening
+                ? 'bg-destructive text-destructive-foreground border-destructive shadow-lg shadow-destructive/30 animate-pulse'
+                : 'bg-background text-muted-foreground border-border hover:bg-muted'
+            }`}
+            aria-label={vcListening ? 'Stop voice commands' : 'Start voice commands'}
+          >
+            {vcListening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+            <span>{vcListening ? (isTamil ? 'கேட்கிறது…' : 'Listening…') : (isTamil ? 'குரல் கட்டளை' : 'Voice Cmd')}</span>
+          </button>
+        )}
       </div>
-      <p className="text-muted-foreground mb-8">
-        {isTamil
-          ? 'நோட்டின் புகைப்படம் எடுக்கவும் — பெயர் மற்றும் மதிப்பு சத்தமாக அறிவிக்கப்படும்'
-          : 'Take a photo of a banknote — the denomination will be identified and read aloud'}
-      </p>
+
+      {/* Transcript bar */}
+      {vcListening && vcTranscript && (
+        <div className="mb-4 bg-destructive/5 border border-destructive/20 rounded-lg px-4 py-2 flex items-center gap-2 text-xs text-destructive font-medium">
+          <Mic className="w-3.5 h-3.5 animate-pulse flex-shrink-0" />
+          <span>{isTamil ? 'கேட்டது: ' : 'Heard: '}<em className="not-italic font-semibold">"{vcTranscript}"</em></span>
+        </div>
+      )}
+
 
       <Card className="mb-6 border-border/50 bg-accent/5">
         <CardContent className="p-4 text-sm text-muted-foreground space-y-1">

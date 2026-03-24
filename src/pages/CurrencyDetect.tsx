@@ -475,24 +475,11 @@ export default function CurrencyDetect() {
               onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
             />
             <div className="flex gap-3 flex-wrap justify-center">
-              <Button onClick={() => fileInputRef.current?.click()}>
+              <Button onClick={openFile}>
                 <Upload className="w-4 h-4 mr-2" />
                 {isTamil ? 'கோப்பு தேர்வு' : 'Choose File'}
               </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  const input = document.createElement('input');
-                  input.type = 'file';
-                  input.accept = 'image/*';
-                  input.capture = 'environment';
-                  input.onchange = (e) => {
-                    const file = (e.target as HTMLInputElement).files?.[0];
-                    if (file) handleFile(file);
-                  };
-                  input.click();
-                }}
-              >
+              <Button variant="outline" onClick={takePhoto}>
                 <Camera className="w-4 h-4 mr-2" />
                 {isTamil ? 'புகைப்படம் எடு' : 'Take Photo'}
               </Button>

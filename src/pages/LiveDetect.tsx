@@ -190,6 +190,7 @@ export default function LiveDetect() {
   const [detections, setDetections] = useState<DetectedItem[]>([]);
   const [obstacleWarning, setObstacleWarning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isTamil = lang === 'ta-IN';
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);

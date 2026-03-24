@@ -184,13 +184,13 @@ function proximityColor(p: 'close' | 'medium' | 'far') {
 export default function LiveDetect() {
   const { user } = useAuth();
   const { lang } = useLanguage();
+  const isTamil = lang === 'ta-IN';
   const [cameraActive, setCameraActive] = useState(false);
   const [modelLoading, setModelLoading] = useState(true);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [detections, setDetections] = useState<DetectedItem[]>([]);
   const [obstacleWarning, setObstacleWarning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const isTamil = lang === 'ta-IN';
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);

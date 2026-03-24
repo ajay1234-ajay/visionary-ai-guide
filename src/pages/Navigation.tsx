@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, lazy, Suspense, useCallback } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense, useCallback, useMemo } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { speak, stopSpeaking } from '@/lib/speech';
+import { usePageVoiceCommands } from '@/hooks/usePageVoiceCommands';
 import {
   fetchRoute, geocodeDestination, voiceInstruction,
   haversineMetres, isOffRoute, fmtDistance,
@@ -15,7 +16,7 @@ import StreetViewCard from '@/components/navigation/StreetViewCard';
 import {
   MapPin, Navigation2, Volume2, VolumeX, Loader2, RefreshCw,
   Search, Route, AlertTriangle, ChevronRight, ChevronLeft,
-  CheckCircle2, AlertCircle,
+  CheckCircle2, AlertCircle, Mic, MicOff,
 } from 'lucide-react';
 
 const MapView = lazy(() => import('@/components/navigation/MapView'));

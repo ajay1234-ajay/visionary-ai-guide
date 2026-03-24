@@ -4,9 +4,150 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { speak, stopSpeaking, buildDetectionSummary, buildProximityWarning } from '@/lib/speech';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Video, VideoOff, Volume2, VolumeX, Loader2, AlertTriangle } from 'lucide-react';
+import { Video, VideoOff, Volume2, VolumeX, Loader2, AlertTriangle, Mic, MicOff } from 'lucide-react';
 import * as tf from '@tensorflow/tfjs';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
+
+// ─── In-page voice command hook ─────────────────────────────────────────────
+const SpeechRecognitionAPI =
+  (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+function usePageVoiceCommands({
+  lang,
+  onStartCamera,
+  onStopCamera,
+  onToggleVoice,
+  onHelp,
+  cameraActive,
+  voiceEnabled,
+}: {
+  lang: string;
+  onStartCamera: () => void;
+  onStopCamera: () => void;
+  onToggleVoice: () => void;
+  onHelp: () => void;
+  cameraActive: boolean;
+  voiceEnabled: boolean;
+}) {
+  const [cmdListening, setCmdListening] = useState(false);
+  const [cmdTranscript, setCmdTranscript] = useState('');
+  const recRef = useRef<any>(null);
+  const activeRef = useRef(false);
+  const isTamil = lang === 'ta-IN';
+
+  // Keep stable refs so callbacks always see latest state
+  const cameraRef = useRef(cameraActive);
+  const voiceRef = useRef(voiceEnabled);
+  useEffect(() => { cameraRef.current = cameraActive; }, [cameraActive]);
+  useEffect(() => { voiceRef.current = voiceEnabled; }, [voiceEnabled]);
+
+  const START_PATTERNS = ['start camera', 'open camera', 'start detection', 'begin detection',
+    'turn on camera', 'enable camera', 'கேமரா தொடங்கு', 'கண்டறிதல் தொடங்கு', 'கேமரா திற'];
+  const STOP_PATTERNS  = ['stop camera', 'close camera', 'stop detection', 'end detection',
+    'turn off camera', 'disable camera', 'கேமரா நிறுத்து', 'கண்டறிதல் நிறுத்து', 'கேமரா மூடு'];
+  const VOICE_PATTERNS = ['toggle voice', 'mute voice', 'unmute voice', 'voice on', 'voice off',
+    'enable voice', 'disable voice', 'குரல் இயக்கு', 'குரல் நிறுத்து', 'குரல் மாற்று'];
+  const HELP_PATTERNS  = ['help', 'commands', 'what can i say', 'உதவி', 'கட்டளைகள்'];
+
+  const handleResult = useCallback((event: any) => {
+    const results = event.results;
+    for (let i = event.resultIndex; i < results.length; i++) {
+      if (!results[i].isFinal) continue;
+      const transcripts: string[] = [];
+      for (let j = 0; j < results[i].length; j++) {
+        transcripts.push(results[i][j].transcript.trim().toLowerCase());
+      }
+      const joined = transcripts.join(' ');
+      setCmdTranscript(transcripts[0]);
+
+      if (START_PATTERNS.some(p => joined.includes(p))) {
+        if (!cameraRef.current) {
+          const msg = isTamil ? 'கேமரா தொடங்குகிறது.' : 'Starting camera.';
+          speak(msg, 0.95, lang);
+          setTimeout(onStartCamera, 400);
+        } else {
+          speak(isTamil ? 'கேமரா ஏற்கனவே இயங்குகிறது.' : 'Camera is already running.', 0.95, lang);
+        }
+      } else if (STOP_PATTERNS.some(p => joined.includes(p))) {
+        if (cameraRef.current) {
+          const msg = isTamil ? 'கேமரா நிறுத்துகிறது.' : 'Stopping camera.';
+          speak(msg, 0.95, lang);
+          setTimeout(onStopCamera, 400);
+        } else {
+          speak(isTamil ? 'கேமரா ஏற்கனவே நிறுத்தப்பட்டது.' : 'Camera is already stopped.', 0.95, lang);
+        }
+      } else if (VOICE_PATTERNS.some(p => joined.includes(p))) {
+        const msg = isTamil
+          ? (voiceRef.current ? 'குரல் அறிவிப்பு நிறுத்தப்படுகிறது.' : 'குரல் அறிவிப்பு இயக்கப்படுகிறது.')
+          : (voiceRef.current ? 'Voice feedback disabled.' : 'Voice feedback enabled.');
+        speak(msg, 0.95, lang);
+        setTimeout(onToggleVoice, 400);
+      } else if (HELP_PATTERNS.some(p => joined.includes(p))) {
+        onHelp();
+      } else if (transcripts[0]) {
+        const msg = isTamil
+          ? `"${transcripts[0]}" புரியவில்லை. "உதவி" என்று சொல்லுங்கள்.`
+          : `"${transcripts[0]}" not recognized. Say "help" for commands.`;
+        speak(msg, 0.95, lang);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lang, isTamil, onStartCamera, onStopCamera, onToggleVoice, onHelp]);
+
+  const startListening = useCallback(() => {
+    if (!SpeechRecognitionAPI) {
+      speak('Speech recognition is not supported in this browser. Please use Chrome.', 0.95, lang);
+      return;
+    }
+    const rec = new SpeechRecognitionAPI();
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.lang = lang === 'ta-IN' ? 'ta-IN' : 'en-US';
+    rec.maxAlternatives = 3;
+    rec.onresult = handleResult;
+    rec.onerror = (e: any) => { if (e.error !== 'no-speech' && e.error !== 'aborted') console.warn('cmd error', e.error); };
+    rec.onend = () => {
+      if (activeRef.current) { try { rec.start(); } catch { /* ignore */ } }
+      else { setCmdListening(false); }
+    };
+    recRef.current = rec;
+    activeRef.current = true;
+    try {
+      rec.start();
+      setCmdListening(true);
+      const msg = lang === 'ta-IN'
+        ? 'கேமரா குரல் கட்டளைகள் இயக்கப்பட்டது. "கேமரா தொடங்கு" அல்லது "கேமரா நிறுத்து" என்று சொல்லுங்கள்.'
+        : 'Camera voice commands active. Say "start camera", "stop camera", or "help".';
+      speak(msg, 0.95, lang);
+    } catch (err) {
+      activeRef.current = false;
+      setCmdListening(false);
+    }
+  }, [handleResult, lang]);
+
+  const stopListening = useCallback(() => {
+    activeRef.current = false;
+    recRef.current?.stop();
+    recRef.current = null;
+    setCmdListening(false);
+    const msg = lang === 'ta-IN' ? 'குரல் கட்டளைகள் நிறுத்தப்பட்டது.' : 'Voice commands stopped.';
+    speak(msg, 0.95, lang);
+  }, [lang]);
+
+  const toggle = useCallback(() => {
+    if (cmdListening) stopListening();
+    else startListening();
+  }, [cmdListening, startListening, stopListening]);
+
+  // Cleanup on unmount
+  useEffect(() => () => {
+    activeRef.current = false;
+    recRef.current?.stop();
+  }, []);
+
+  return { cmdListening, cmdTranscript, supported: !!SpeechRecognitionAPI, toggle };
+}
+// ────────────────────────────────────────────────────────────────────────────
 
 interface DetectedItem {
   name: string;
@@ -43,6 +184,7 @@ function proximityColor(p: 'close' | 'medium' | 'far') {
 export default function LiveDetect() {
   const { user } = useAuth();
   const { lang } = useLanguage();
+  const isTamil = lang === 'ta-IN';
   const [cameraActive, setCameraActive] = useState(false);
   const [modelLoading, setModelLoading] = useState(true);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
@@ -242,22 +384,90 @@ export default function LiveDetect() {
     };
   }, []);
 
-  if (!user) return null;
+  const handleToggleVoice = useCallback(() => {
+    const next = !voiceEnabled;
+    setVoiceEnabled(next);
+    voiceEnabledRef.current = next;
+    if (!next) stopSpeaking();
+  }, [voiceEnabled]);
 
-  const isTamil = lang === 'ta-IN';
+  const handleHelp = useCallback(() => {
+    const msg = isTamil
+      ? 'கட்டளைகள்: கேமரா தொடங்கு, கேமரா நிறுத்து, குரல் மாற்று, உதவி'
+      : 'Commands: start camera, stop camera, toggle voice, help.';
+    speak(msg, 0.9, lang);
+  }, [isTamil, lang]);
+
+  const { cmdListening, cmdTranscript, supported: cmdSupported, toggle: toggleCmdListen } =
+    usePageVoiceCommands({
+      lang,
+      onStartCamera: startCamera,
+      onStopCamera: stopCamera,
+      onToggleVoice: handleToggleVoice,
+      onHelp: handleHelp,
+      cameraActive,
+      voiceEnabled,
+    });
+
+  if (!user) return null;
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-foreground mb-1">
-          {isTamil ? 'நேரடி பொருள் கண்டறிதல்' : 'Live Object Detection'}
-        </h1>
-        <p className="text-muted-foreground text-sm">
-          {isTamil
-            ? 'ஒவ்வொரு 2.5 வினாடிக்கும் குரல் அறிவிப்புடன் நேரடி AI கண்டறிதல்'
-            : 'Real-time AI detection with voice announcements every 2.5 seconds'}
-        </p>
+      <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-3xl font-bold text-foreground mb-1">
+            {isTamil ? 'நேரடி பொருள் கண்டறிதல்' : 'Live Object Detection'}
+          </h1>
+          <p className="text-muted-foreground text-sm">
+            {isTamil
+              ? 'ஒவ்வொரு 2.5 வினாடிக்கும் குரல் அறிவிப்புடன் நேரடி AI கண்டறிதல்'
+              : 'Real-time AI detection with voice announcements every 2.5 seconds'}
+          </p>
+        </div>
+        {/* In-page voice command toggle */}
+        {cmdSupported && (
+          <button
+            onClick={toggleCmdListen}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold border transition-all select-none ${
+              cmdListening
+                ? 'bg-destructive text-destructive-foreground border-destructive shadow-lg shadow-destructive/30 animate-pulse'
+                : 'bg-background text-muted-foreground border-border hover:bg-muted'
+            }`}
+            aria-label={cmdListening ? 'Stop camera voice commands' : 'Start camera voice commands'}
+            title={cmdListening
+              ? (isTamil ? 'குரல் கட்டளைகள் நிறுத்து' : 'Stop voice commands')
+              : (isTamil ? 'குரல் கட்டளைகள் தொடங்கு' : 'Start voice commands')}
+          >
+            {cmdListening
+              ? <><MicOff className="w-3.5 h-3.5" /><span>{isTamil ? 'கேட்கிறது…' : 'Listening…'}</span></>
+              : <><Mic className="w-3.5 h-3.5" /><span>{isTamil ? 'குரல் கட்டளை' : 'Voice Cmd'}</span></>}
+          </button>
+        )}
       </div>
+      {/* Live transcript bar */}
+      {cmdListening && cmdTranscript && (
+        <div className="mb-3 flex items-center gap-2 bg-destructive/5 border border-destructive/20 rounded-lg px-4 py-2 text-xs text-destructive font-medium">
+          <Mic className="w-3.5 h-3.5 flex-shrink-0 animate-pulse" />
+          <span>{isTamil ? 'கேட்டது: ' : 'Heard: '}<em className="not-italic font-semibold">"{cmdTranscript}"</em></span>
+        </div>
+      )}
+      {/* Voice command help card */}
+      {cmdListening && (
+        <Card className="mb-4 border-primary/20 bg-primary/5">
+          <CardContent className="p-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+            <span className="font-semibold text-foreground">{isTamil ? 'கட்டளைகள்:' : 'Say:'}</span>
+            {[
+              isTamil ? '"கேமரா தொடங்கு"' : '"start camera"',
+              isTamil ? '"கேமரா நிறுத்து"' : '"stop camera"',
+              isTamil ? '"குரல் மாற்று"' : '"toggle voice"',
+              isTamil ? '"உதவி"' : '"help"',
+            ].map(cmd => (
+              <span key={cmd} className="bg-primary/10 text-primary px-2 py-0.5 rounded-full font-mono">{cmd}</span>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
 
       {/* Model loading */}
       {modelLoading && (
@@ -386,17 +596,7 @@ export default function LiveDetect() {
           variant={voiceEnabled ? 'default' : 'outline'}
           size="lg"
           className="flex-1 sm:flex-none"
-          onClick={() => {
-            const next = !voiceEnabled;
-            setVoiceEnabled(next);
-            voiceEnabledRef.current = next;
-            if (!next) stopSpeaking();
-            else speak(
-              isTamil ? 'குரல் கருத்து இயக்கப்பட்டது.' : 'Voice feedback enabled.',
-              0.95,
-              lang,
-            );
-          }}
+          onClick={handleToggleVoice}
           aria-label={voiceEnabled ? 'Disable voice feedback' : 'Enable voice feedback'}
         >
           {voiceEnabled

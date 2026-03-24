@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, lazy, Suspense, useCallback } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense, useCallback, useMemo } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { speak, stopSpeaking } from '@/lib/speech';
+import { usePageVoiceCommands } from '@/hooks/usePageVoiceCommands';
 import {
   fetchRoute, geocodeDestination, voiceInstruction,
   haversineMetres, isOffRoute, fmtDistance,
@@ -15,7 +16,7 @@ import StreetViewCard from '@/components/navigation/StreetViewCard';
 import {
   MapPin, Navigation2, Volume2, VolumeX, Loader2, RefreshCw,
   Search, Route, AlertTriangle, ChevronRight, ChevronLeft,
-  CheckCircle2, AlertCircle,
+  CheckCircle2, AlertCircle, Mic, MicOff,
 } from 'lucide-react';
 
 const MapView = lazy(() => import('@/components/navigation/MapView'));
@@ -320,6 +321,89 @@ export default function Navigation() {
     stopSpeaking();
   }, []);
 
+  // ─── Voice commands for navigation ───────────────────────────────────────
+  const navCommands = useMemo(() => [
+    {
+      patterns: ['get my location', 'where am i', 'my location', 'find me',
+                 'என் இருப்பிடம்', 'நான் எங்கே', 'இருப்பிடம் பெறு'],
+      action: getLocation,
+      confirmEn: 'Getting your location.',
+      confirmTa: 'உங்கள் இருப்பிடம் பெறுகிறது.',
+    },
+    {
+      patterns: ['start navigation', 'begin navigation', 'go', 'navigate',
+                 'வழிகாட்டுதல் தொடங்கு', 'போகலாம்'],
+      action: () => { if (routeResultRef.current) startNavigation(); else speak(isTamil ? 'முதலில் வழியை கணக்கிடவும்.' : 'Please calculate a route first.', 0.9, lang); },
+      confirmEn: 'Starting navigation.',
+      confirmTa: 'வழிகாட்டுதல் தொடங்குகிறது.',
+    },
+    {
+      patterns: ['stop navigation', 'end navigation', 'cancel navigation',
+                 'வழிகாட்டுதல் நிறுத்து', 'வழிகாட்டுதல் ரத்து'],
+      action: stopNavigation,
+      confirmEn: 'Navigation stopped.',
+      confirmTa: 'வழிகாட்டுதல் நிறுத்தப்பட்டது.',
+    },
+    {
+      patterns: ['next step', 'next turn', 'next direction',
+                 'அடுத்த படி', 'அடுத்த திருப்பம்'],
+      action: nextStep,
+      confirmEn: 'Next step.',
+      confirmTa: 'அடுத்த படி.',
+    },
+    {
+      patterns: ['previous step', 'go back', 'previous direction',
+                 'முந்தைய படி', 'திரும்பு'],
+      action: prevStep,
+      confirmEn: 'Previous step.',
+      confirmTa: 'முந்தைய படி.',
+    },
+    {
+      patterns: ['repeat', 'say again', 'repeat direction', 'read step',
+                 'மீண்டும் சொல்', 'திசையை படி'],
+      action: readCurrentStep,
+      confirmEn: 'Repeating current direction.',
+      confirmTa: 'தற்போதைய திசையை மீண்டும் சொல்கிறது.',
+    },
+    {
+      patterns: ['recalculate', 'reroute', 'recalculate route',
+                 'வழியை மீண்டும் கணக்கிடு', 'புதிய வழி'],
+      action: calculateRoute,
+      confirmEn: 'Recalculating route.',
+      confirmTa: 'வழியை மீண்டும் கணக்கிடுகிறது.',
+    },
+    {
+      patterns: ['read location', 'current address', 'where exactly',
+                 'இருப்பிடம் படி', 'தற்போதைய முகவரி'],
+      action: () => {
+        if (location) speak(isTamil ? `நீங்கள் ${location.address} இல் உள்ளீர்கள்.` : `You are at ${location.address}.`, 0.9, lang);
+        else speak(isTamil ? 'இருப்பிடம் கிடைக்கவில்லை.' : 'Location not available.', 0.9, lang);
+      },
+      confirmEn: 'Reading your location.',
+      confirmTa: 'இருப்பிடத்தை படிக்கிறது.',
+    },
+    {
+      patterns: ['help', 'commands', 'what can i say', 'உதவி', 'கட்டளைகள்'],
+      action: () => speak(
+        isTamil
+          ? 'கட்டளைகள்: என் இருப்பிடம், வழிகாட்டுதல் தொடங்கு, நிறுத்து, அடுத்த படி, முந்தைய படி, மீண்டும் சொல், இருப்பிடம் படி'
+          : 'Commands: get my location, start navigation, stop navigation, next step, previous step, repeat, read location.',
+        0.88, lang,
+      ),
+      confirmEn: 'Listing commands.',
+      confirmTa: 'கட்டளைகளை அறிவிக்கிறது.',
+    },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [getLocation, startNavigation, stopNavigation, nextStep, prevStep, readCurrentStep, calculateRoute, isTamil, lang, location]);
+
+  const { listening: vcListening, transcript: vcTranscript, supported: vcSupported, toggle: vcToggle } =
+    usePageVoiceCommands({
+      lang,
+      commands: navCommands,
+      activateMessageEn: 'Navigation voice commands active. Say "get my location", "start navigation", or "help".',
+      activateMessageTa: 'வழிகாட்டுதல் குரல் கட்டளைகள் இயக்கப்பட்டது. "என் இருப்பிடம்", "வழிகாட்டுதல் தொடங்கு" என்று சொல்லுங்கள்.',
+    });
+
   if (!user) return null;
 
   const currentStep = routeResult?.steps[activeStep];
@@ -328,21 +412,46 @@ export default function Navigation() {
   return (
     <div className="max-w-3xl mx-auto px-4 py-8 space-y-6">
       {/* Header */}
-      <div>
-        <div className="flex items-center gap-3 mb-1">
-          <div className="w-10 h-10 rounded-xl bg-secondary/10 flex items-center justify-center">
-            <Navigation2 className="w-5 h-5 text-secondary" />
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <div className="flex items-center gap-3 mb-1">
+            <div className="w-10 h-10 rounded-xl bg-secondary/10 flex items-center justify-center">
+              <Navigation2 className="w-5 h-5 text-secondary" />
+            </div>
+            <h1 className="text-3xl font-bold text-foreground">
+              {isTamil ? 'GPS வழிகாட்டுதல்' : 'GPS Navigation'}
+            </h1>
           </div>
-          <h1 className="text-3xl font-bold text-foreground">
-            {isTamil ? 'GPS வழிகாட்டுதல்' : 'GPS Navigation'}
-          </h1>
+          <p className="text-muted-foreground text-sm ml-13">
+            {isTamil
+              ? 'நேரடி GPS கண்காணிப்பு மற்றும் குரல் வழிகாட்டுதல்'
+              : 'Real-time GPS tracking with automatic step advancement & voice guidance'}
+          </p>
         </div>
-        <p className="text-muted-foreground ml-13">
-          {isTamil
-            ? 'நேரடி GPS கண்காணிப்பு மற்றும் குரல் வழிகாட்டுதல்'
-            : 'Real-time GPS tracking with automatic step advancement & voice guidance'}
-        </p>
+        {/* Voice command toggle */}
+        {vcSupported && (
+          <button
+            onClick={vcToggle}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold border transition-all select-none ${
+              vcListening
+                ? 'bg-destructive text-destructive-foreground border-destructive shadow-lg shadow-destructive/30 animate-pulse'
+                : 'bg-background text-muted-foreground border-border hover:bg-muted'
+            }`}
+            aria-label={vcListening ? 'Stop voice commands' : 'Start voice commands'}
+          >
+            {vcListening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+            <span>{vcListening ? (isTamil ? 'கேட்கிறது…' : 'Listening…') : (isTamil ? 'குரல் கட்டளை' : 'Voice Cmd')}</span>
+          </button>
+        )}
       </div>
+
+      {/* Transcript bar */}
+      {vcListening && vcTranscript && (
+        <div className="bg-destructive/5 border border-destructive/20 rounded-lg px-4 py-2 flex items-center gap-2 text-xs text-destructive font-medium">
+          <Mic className="w-3.5 h-3.5 animate-pulse flex-shrink-0" />
+          <span>{isTamil ? 'கேட்டது: ' : 'Heard: '}<em className="not-italic font-semibold">"{vcTranscript}"</em></span>
+        </div>
+      )}
 
       {/* Controls */}
       <div className="flex flex-wrap gap-2">

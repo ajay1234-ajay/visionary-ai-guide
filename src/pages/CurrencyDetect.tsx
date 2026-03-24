@@ -1,10 +1,11 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { speak, stopSpeaking } from '@/lib/speech';
+import { usePageVoiceCommands } from '@/hooks/usePageVoiceCommands';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Upload, Camera, Volume2, VolumeX, Loader2, RotateCcw, Banknote } from 'lucide-react';
+import { Upload, Camera, Volume2, VolumeX, Loader2, RotateCcw, Banknote, Mic, MicOff } from 'lucide-react';
 
 // ─── Indian Rupee denomination profiles ──────────────────────────────────────
 // Each note has: dominant hue range, saturation range, brightness range, aspect ratio
@@ -300,12 +301,91 @@ export default function CurrencyDetect() {
     }
   };
 
-  const reset = () => {
+  const reset = useCallback(() => {
     setImageUrl(null);
     setResult(null);
     stopSpeaking();
     setIsSpeaking(false);
-  };
+  }, []);
+
+  const openFile = useCallback(() => { fileInputRef.current?.click(); }, []);
+
+  const takePhoto = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment';
+    input.onchange = (e) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) handleFile(f); };
+    input.click();
+  }, []);
+
+  const readResult = useCallback(() => {
+    if (!result) {
+      speak(isTamil ? 'முதலில் நோட்டின் படம் பதிவேற்றவும்.' : 'Please upload a note image first.', 0.9, lang);
+      return;
+    }
+    const speech = isTamil
+      ? `கண்டறியப்பட்ட நோட்டு: ${result.label}. நம்பகத்தன்மை ${result.confidence} சதவீதம்.`
+      : `Detected: ${result.label}. Confidence ${result.confidence} percent.`;
+    speak(speech, 0.9, lang);
+    setIsSpeaking(true);
+  }, [result, isTamil, lang]);
+
+  // ─── Voice commands ───────────────────────────────────────────────────────
+  const currencyCommands = useMemo(() => [
+    {
+      patterns: ['upload image', 'choose file', 'select image', 'open file',
+                 'படம் பதிவேற்று', 'கோப்பு திற'],
+      action: openFile,
+      confirmEn: 'Opening file picker.',
+      confirmTa: 'கோப்பு திறக்கிறது.',
+    },
+    {
+      patterns: ['take photo', 'capture image', 'use camera', 'open camera',
+                 'புகைப்படம் எடு', 'கேமரா திற'],
+      action: takePhoto,
+      confirmEn: 'Opening camera.',
+      confirmTa: 'கேமரா திறக்கிறது.',
+    },
+    {
+      patterns: ['analyze', 'detect', 'detect currency', 'identify note', 'scan note',
+                 'நோட்டை பகுப்பாய்', 'கண்டறி', 'ஆய்வு செய்'],
+      action: runDetection,
+      confirmEn: 'Analyzing currency.',
+      confirmTa: 'நோட்டை பகுப்பாய்வு செய்கிறது.',
+    },
+    {
+      patterns: ['read result', 'what is it', 'tell me', 'say result', 'which note',
+                 'முடிவு படி', 'என்ன நோட்டு', 'சொல்'],
+      action: readResult,
+      confirmEn: 'Reading detection result.',
+      confirmTa: 'கண்டறிந்த முடிவை படிக்கிறது.',
+    },
+    {
+      patterns: ['clear', 'reset', 'new photo', 'new image', 'start over',
+                 'அழி', 'மீட்டமை', 'புதிய படம்'],
+      action: reset,
+      confirmEn: 'Cleared. Ready for a new photo.',
+      confirmTa: 'அழிக்கப்பட்டது. புதிய படத்திற்கு தயாராக உள்ளது.',
+    },
+    {
+      patterns: ['help', 'commands', 'what can i say', 'உதவி', 'கட்டளைகள்'],
+      action: () => speak(
+        isTamil
+          ? 'கட்டளைகள்: படம் பதிவேற்று, புகைப்படம் எடு, கண்டறி, முடிவு படி, அழி'
+          : 'Commands: upload image, take photo, analyze, read result, clear.',
+        0.88, lang,
+      ),
+      confirmEn: 'Listing commands.',
+      confirmTa: 'கட்டளைகளை அறிவிக்கிறது.',
+    },
+  ], [openFile, takePhoto, runDetection, readResult, reset, isTamil, lang]);
+
+  const { listening: vcListening, transcript: vcTranscript, supported: vcSupported, toggle: vcToggle } =
+    usePageVoiceCommands({
+      lang,
+      commands: currencyCommands,
+      activateMessageEn: 'Currency detection voice commands active. Say "upload image", "analyze", or "help".',
+      activateMessageTa: 'நோட்டு கண்டறிதல் குரல் கட்டளைகள் இயக்கப்பட்டது. "படம் பதிவேற்று", "கண்டறி" என்று சொல்லுங்கள்.',
+    });
 
   if (!user) return null;
 
@@ -318,19 +398,48 @@ export default function CurrencyDetect() {
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-10">
-      <div className="flex items-center gap-3 mb-2">
-        <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center">
-          <Banknote className="w-5 h-5 text-accent" />
+      {/* Header row */}
+      <div className="flex items-start justify-between gap-4 mb-2 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center">
+            <Banknote className="w-5 h-5 text-accent" />
+          </div>
+          <div>
+            <h1 className="text-3xl font-bold text-foreground">
+              {isTamil ? 'நோட்டு கண்டறிதல்' : 'Currency Detection'}
+            </h1>
+            <p className="text-muted-foreground text-sm">
+              {isTamil
+                ? 'நோட்டின் புகைப்படம் எடுக்கவும் — பெயர் மற்றும் மதிப்பு சத்தமாக அறிவிக்கப்படும்'
+                : 'Take a photo of a banknote — the denomination will be identified and read aloud'}
+            </p>
+          </div>
         </div>
-        <h1 className="text-3xl font-bold text-foreground">
-          {isTamil ? 'நோட்டு கண்டறிதல்' : 'Currency Detection'}
-        </h1>
+        {/* Voice command toggle */}
+        {vcSupported && (
+          <button
+            onClick={vcToggle}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold border transition-all select-none ${
+              vcListening
+                ? 'bg-destructive text-destructive-foreground border-destructive shadow-lg shadow-destructive/30 animate-pulse'
+                : 'bg-background text-muted-foreground border-border hover:bg-muted'
+            }`}
+            aria-label={vcListening ? 'Stop voice commands' : 'Start voice commands'}
+          >
+            {vcListening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+            <span>{vcListening ? (isTamil ? 'கேட்கிறது…' : 'Listening…') : (isTamil ? 'குரல் கட்டளை' : 'Voice Cmd')}</span>
+          </button>
+        )}
       </div>
-      <p className="text-muted-foreground mb-8">
-        {isTamil
-          ? 'நோட்டின் புகைப்படம் எடுக்கவும் — பெயர் மற்றும் மதிப்பு சத்தமாக அறிவிக்கப்படும்'
-          : 'Take a photo of a banknote — the denomination will be identified and read aloud'}
-      </p>
+
+      {/* Transcript bar */}
+      {vcListening && vcTranscript && (
+        <div className="mb-4 bg-destructive/5 border border-destructive/20 rounded-lg px-4 py-2 flex items-center gap-2 text-xs text-destructive font-medium">
+          <Mic className="w-3.5 h-3.5 animate-pulse flex-shrink-0" />
+          <span>{isTamil ? 'கேட்டது: ' : 'Heard: '}<em className="not-italic font-semibold">"{vcTranscript}"</em></span>
+        </div>
+      )}
+
 
       <Card className="mb-6 border-border/50 bg-accent/5">
         <CardContent className="p-4 text-sm text-muted-foreground space-y-1">
@@ -366,24 +475,11 @@ export default function CurrencyDetect() {
               onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
             />
             <div className="flex gap-3 flex-wrap justify-center">
-              <Button onClick={() => fileInputRef.current?.click()}>
+              <Button onClick={openFile}>
                 <Upload className="w-4 h-4 mr-2" />
                 {isTamil ? 'கோப்பு தேர்வு' : 'Choose File'}
               </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  const input = document.createElement('input');
-                  input.type = 'file';
-                  input.accept = 'image/*';
-                  input.capture = 'environment';
-                  input.onchange = (e) => {
-                    const file = (e.target as HTMLInputElement).files?.[0];
-                    if (file) handleFile(file);
-                  };
-                  input.click();
-                }}
-              >
+              <Button variant="outline" onClick={takePhoto}>
                 <Camera className="w-4 h-4 mr-2" />
                 {isTamil ? 'புகைப்படம் எடு' : 'Take Photo'}
               </Button>

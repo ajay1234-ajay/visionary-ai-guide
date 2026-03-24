@@ -384,22 +384,90 @@ export default function LiveDetect() {
     };
   }, []);
 
-  if (!user) return null;
+  const handleToggleVoice = useCallback(() => {
+    const next = !voiceEnabled;
+    setVoiceEnabled(next);
+    voiceEnabledRef.current = next;
+    if (!next) stopSpeaking();
+  }, [voiceEnabled]);
 
-  const isTamil = lang === 'ta-IN';
+  const handleHelp = useCallback(() => {
+    const msg = isTamil
+      ? 'கட்டளைகள்: கேமரா தொடங்கு, கேமரா நிறுத்து, குரல் மாற்று, உதவி'
+      : 'Commands: start camera, stop camera, toggle voice, help.';
+    speak(msg, 0.9, lang);
+  }, [isTamil, lang]);
+
+  const { cmdListening, cmdTranscript, supported: cmdSupported, toggle: toggleCmdListen } =
+    usePageVoiceCommands({
+      lang,
+      onStartCamera: startCamera,
+      onStopCamera: stopCamera,
+      onToggleVoice: handleToggleVoice,
+      onHelp: handleHelp,
+      cameraActive,
+      voiceEnabled,
+    });
+
+  if (!user) return null;
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-foreground mb-1">
-          {isTamil ? 'நேரடி பொருள் கண்டறிதல்' : 'Live Object Detection'}
-        </h1>
-        <p className="text-muted-foreground text-sm">
-          {isTamil
-            ? 'ஒவ்வொரு 2.5 வினாடிக்கும் குரல் அறிவிப்புடன் நேரடி AI கண்டறிதல்'
-            : 'Real-time AI detection with voice announcements every 2.5 seconds'}
-        </p>
+      <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-3xl font-bold text-foreground mb-1">
+            {isTamil ? 'நேரடி பொருள் கண்டறிதல்' : 'Live Object Detection'}
+          </h1>
+          <p className="text-muted-foreground text-sm">
+            {isTamil
+              ? 'ஒவ்வொரு 2.5 வினாடிக்கும் குரல் அறிவிப்புடன் நேரடி AI கண்டறிதல்'
+              : 'Real-time AI detection with voice announcements every 2.5 seconds'}
+          </p>
+        </div>
+        {/* In-page voice command toggle */}
+        {cmdSupported && (
+          <button
+            onClick={toggleCmdListen}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold border transition-all select-none ${
+              cmdListening
+                ? 'bg-destructive text-destructive-foreground border-destructive shadow-lg shadow-destructive/30 animate-pulse'
+                : 'bg-background text-muted-foreground border-border hover:bg-muted'
+            }`}
+            aria-label={cmdListening ? 'Stop camera voice commands' : 'Start camera voice commands'}
+            title={cmdListening
+              ? (isTamil ? 'குரல் கட்டளைகள் நிறுத்து' : 'Stop voice commands')
+              : (isTamil ? 'குரல் கட்டளைகள் தொடங்கு' : 'Start voice commands')}
+          >
+            {cmdListening
+              ? <><MicOff className="w-3.5 h-3.5" /><span>{isTamil ? 'கேட்கிறது…' : 'Listening…'}</span></>
+              : <><Mic className="w-3.5 h-3.5" /><span>{isTamil ? 'குரல் கட்டளை' : 'Voice Cmd'}</span></>}
+          </button>
+        )}
       </div>
+      {/* Live transcript bar */}
+      {cmdListening && cmdTranscript && (
+        <div className="mb-3 flex items-center gap-2 bg-destructive/5 border border-destructive/20 rounded-lg px-4 py-2 text-xs text-destructive font-medium">
+          <Mic className="w-3.5 h-3.5 flex-shrink-0 animate-pulse" />
+          <span>{isTamil ? 'கேட்டது: ' : 'Heard: '}<em className="not-italic font-semibold">"{cmdTranscript}"</em></span>
+        </div>
+      )}
+      {/* Voice command help card */}
+      {cmdListening && (
+        <Card className="mb-4 border-primary/20 bg-primary/5">
+          <CardContent className="p-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+            <span className="font-semibold text-foreground">{isTamil ? 'கட்டளைகள்:' : 'Say:'}</span>
+            {[
+              isTamil ? '"கேமரா தொடங்கு"' : '"start camera"',
+              isTamil ? '"கேமரா நிறுத்து"' : '"stop camera"',
+              isTamil ? '"குரல் மாற்று"' : '"toggle voice"',
+              isTamil ? '"உதவி"' : '"help"',
+            ].map(cmd => (
+              <span key={cmd} className="bg-primary/10 text-primary px-2 py-0.5 rounded-full font-mono">{cmd}</span>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
 
       {/* Model loading */}
       {modelLoading && (

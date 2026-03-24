@@ -1,10 +1,11 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { speak, stopSpeaking } from '@/lib/speech';
+import { usePageVoiceCommands } from '@/hooks/usePageVoiceCommands';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Upload, Camera, Volume2, VolumeX, Loader2, RotateCcw, Banknote } from 'lucide-react';
+import { Upload, Camera, Volume2, VolumeX, Loader2, RotateCcw, Banknote, Mic, MicOff } from 'lucide-react';
 
 // ─── Indian Rupee denomination profiles ──────────────────────────────────────
 // Each note has: dominant hue range, saturation range, brightness range, aspect ratio

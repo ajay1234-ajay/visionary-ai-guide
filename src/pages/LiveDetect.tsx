@@ -4,9 +4,150 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { speak, stopSpeaking, buildDetectionSummary, buildProximityWarning } from '@/lib/speech';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Video, VideoOff, Volume2, VolumeX, Loader2, AlertTriangle } from 'lucide-react';
+import { Video, VideoOff, Volume2, VolumeX, Loader2, AlertTriangle, Mic, MicOff } from 'lucide-react';
 import * as tf from '@tensorflow/tfjs';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
+
+// ─── In-page voice command hook ─────────────────────────────────────────────
+const SpeechRecognitionAPI =
+  (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+function usePageVoiceCommands({
+  lang,
+  onStartCamera,
+  onStopCamera,
+  onToggleVoice,
+  onHelp,
+  cameraActive,
+  voiceEnabled,
+}: {
+  lang: string;
+  onStartCamera: () => void;
+  onStopCamera: () => void;
+  onToggleVoice: () => void;
+  onHelp: () => void;
+  cameraActive: boolean;
+  voiceEnabled: boolean;
+}) {
+  const [cmdListening, setCmdListening] = useState(false);
+  const [cmdTranscript, setCmdTranscript] = useState('');
+  const recRef = useRef<any>(null);
+  const activeRef = useRef(false);
+  const isTamil = lang === 'ta-IN';
+
+  // Keep stable refs so callbacks always see latest state
+  const cameraRef = useRef(cameraActive);
+  const voiceRef = useRef(voiceEnabled);
+  useEffect(() => { cameraRef.current = cameraActive; }, [cameraActive]);
+  useEffect(() => { voiceRef.current = voiceEnabled; }, [voiceEnabled]);
+
+  const START_PATTERNS = ['start camera', 'open camera', 'start detection', 'begin detection',
+    'turn on camera', 'enable camera', 'கேமரா தொடங்கு', 'கண்டறிதல் தொடங்கு', 'கேமரா திற'];
+  const STOP_PATTERNS  = ['stop camera', 'close camera', 'stop detection', 'end detection',
+    'turn off camera', 'disable camera', 'கேமரா நிறுத்து', 'கண்டறிதல் நிறுத்து', 'கேமரா மூடு'];
+  const VOICE_PATTERNS = ['toggle voice', 'mute voice', 'unmute voice', 'voice on', 'voice off',
+    'enable voice', 'disable voice', 'குரல் இயக்கு', 'குரல் நிறுத்து', 'குரல் மாற்று'];
+  const HELP_PATTERNS  = ['help', 'commands', 'what can i say', 'உதவி', 'கட்டளைகள்'];
+
+  const handleResult = useCallback((event: any) => {
+    const results = event.results;
+    for (let i = event.resultIndex; i < results.length; i++) {
+      if (!results[i].isFinal) continue;
+      const transcripts: string[] = [];
+      for (let j = 0; j < results[i].length; j++) {
+        transcripts.push(results[i][j].transcript.trim().toLowerCase());
+      }
+      const joined = transcripts.join(' ');
+      setCmdTranscript(transcripts[0]);
+
+      if (START_PATTERNS.some(p => joined.includes(p))) {
+        if (!cameraRef.current) {
+          const msg = isTamil ? 'கேமரா தொடங்குகிறது.' : 'Starting camera.';
+          speak(msg, 0.95, lang);
+          setTimeout(onStartCamera, 400);
+        } else {
+          speak(isTamil ? 'கேமரா ஏற்கனவே இயங்குகிறது.' : 'Camera is already running.', 0.95, lang);
+        }
+      } else if (STOP_PATTERNS.some(p => joined.includes(p))) {
+        if (cameraRef.current) {
+          const msg = isTamil ? 'கேமரா நிறுத்துகிறது.' : 'Stopping camera.';
+          speak(msg, 0.95, lang);
+          setTimeout(onStopCamera, 400);
+        } else {
+          speak(isTamil ? 'கேமரா ஏற்கனவே நிறுத்தப்பட்டது.' : 'Camera is already stopped.', 0.95, lang);
+        }
+      } else if (VOICE_PATTERNS.some(p => joined.includes(p))) {
+        const msg = isTamil
+          ? (voiceRef.current ? 'குரல் அறிவிப்பு நிறுத்தப்படுகிறது.' : 'குரல் அறிவிப்பு இயக்கப்படுகிறது.')
+          : (voiceRef.current ? 'Voice feedback disabled.' : 'Voice feedback enabled.');
+        speak(msg, 0.95, lang);
+        setTimeout(onToggleVoice, 400);
+      } else if (HELP_PATTERNS.some(p => joined.includes(p))) {
+        onHelp();
+      } else if (transcripts[0]) {
+        const msg = isTamil
+          ? `"${transcripts[0]}" புரியவில்லை. "உதவி" என்று சொல்லுங்கள்.`
+          : `"${transcripts[0]}" not recognized. Say "help" for commands.`;
+        speak(msg, 0.95, lang);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lang, isTamil, onStartCamera, onStopCamera, onToggleVoice, onHelp]);
+
+  const startListening = useCallback(() => {
+    if (!SpeechRecognitionAPI) {
+      speak('Speech recognition is not supported in this browser. Please use Chrome.', 0.95, lang);
+      return;
+    }
+    const rec = new SpeechRecognitionAPI();
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.lang = lang === 'ta-IN' ? 'ta-IN' : 'en-US';
+    rec.maxAlternatives = 3;
+    rec.onresult = handleResult;
+    rec.onerror = (e: any) => { if (e.error !== 'no-speech' && e.error !== 'aborted') console.warn('cmd error', e.error); };
+    rec.onend = () => {
+      if (activeRef.current) { try { rec.start(); } catch { /* ignore */ } }
+      else { setCmdListening(false); }
+    };
+    recRef.current = rec;
+    activeRef.current = true;
+    try {
+      rec.start();
+      setCmdListening(true);
+      const msg = lang === 'ta-IN'
+        ? 'கேமரா குரல் கட்டளைகள் இயக்கப்பட்டது. "கேமரா தொடங்கு" அல்லது "கேமரா நிறுத்து" என்று சொல்லுங்கள்.'
+        : 'Camera voice commands active. Say "start camera", "stop camera", or "help".';
+      speak(msg, 0.95, lang);
+    } catch (err) {
+      activeRef.current = false;
+      setCmdListening(false);
+    }
+  }, [handleResult, lang]);
+
+  const stopListening = useCallback(() => {
+    activeRef.current = false;
+    recRef.current?.stop();
+    recRef.current = null;
+    setCmdListening(false);
+    const msg = lang === 'ta-IN' ? 'குரல் கட்டளைகள் நிறுத்தப்பட்டது.' : 'Voice commands stopped.';
+    speak(msg, 0.95, lang);
+  }, [lang]);
+
+  const toggle = useCallback(() => {
+    if (cmdListening) stopListening();
+    else startListening();
+  }, [cmdListening, startListening, stopListening]);
+
+  // Cleanup on unmount
+  useEffect(() => () => {
+    activeRef.current = false;
+    recRef.current?.stop();
+  }, []);
+
+  return { cmdListening, cmdTranscript, supported: !!SpeechRecognitionAPI, toggle };
+}
+// ────────────────────────────────────────────────────────────────────────────
 
 interface DetectedItem {
   name: string;

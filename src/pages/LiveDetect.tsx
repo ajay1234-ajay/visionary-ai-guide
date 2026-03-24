@@ -596,17 +596,7 @@ export default function LiveDetect() {
           variant={voiceEnabled ? 'default' : 'outline'}
           size="lg"
           className="flex-1 sm:flex-none"
-          onClick={() => {
-            const next = !voiceEnabled;
-            setVoiceEnabled(next);
-            voiceEnabledRef.current = next;
-            if (!next) stopSpeaking();
-            else speak(
-              isTamil ? 'குரல் கருத்து இயக்கப்பட்டது.' : 'Voice feedback enabled.',
-              0.95,
-              lang,
-            );
-          }}
+          onClick={handleToggleVoice}
           aria-label={voiceEnabled ? 'Disable voice feedback' : 'Enable voice feedback'}
         >
           {voiceEnabled

@@ -301,12 +301,91 @@ export default function CurrencyDetect() {
     }
   };
 
-  const reset = () => {
+  const reset = useCallback(() => {
     setImageUrl(null);
     setResult(null);
     stopSpeaking();
     setIsSpeaking(false);
-  };
+  }, []);
+
+  const openFile = useCallback(() => { fileInputRef.current?.click(); }, []);
+
+  const takePhoto = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment';
+    input.onchange = (e) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) handleFile(f); };
+    input.click();
+  }, []);
+
+  const readResult = useCallback(() => {
+    if (!result) {
+      speak(isTamil ? 'முதலில் நோட்டின் படம் பதிவேற்றவும்.' : 'Please upload a note image first.', 0.9, lang);
+      return;
+    }
+    const speech = isTamil
+      ? `கண்டறியப்பட்ட நோட்டு: ${result.label}. நம்பகத்தன்மை ${result.confidence} சதவீதம்.`
+      : `Detected: ${result.label}. Confidence ${result.confidence} percent.`;
+    speak(speech, 0.9, lang);
+    setIsSpeaking(true);
+  }, [result, isTamil, lang]);
+
+  // ─── Voice commands ───────────────────────────────────────────────────────
+  const currencyCommands = useMemo(() => [
+    {
+      patterns: ['upload image', 'choose file', 'select image', 'open file',
+                 'படம் பதிவேற்று', 'கோப்பு திற'],
+      action: openFile,
+      confirmEn: 'Opening file picker.',
+      confirmTa: 'கோப்பு திறக்கிறது.',
+    },
+    {
+      patterns: ['take photo', 'capture image', 'use camera', 'open camera',
+                 'புகைப்படம் எடு', 'கேமரா திற'],
+      action: takePhoto,
+      confirmEn: 'Opening camera.',
+      confirmTa: 'கேமரா திறக்கிறது.',
+    },
+    {
+      patterns: ['analyze', 'detect', 'detect currency', 'identify note', 'scan note',
+                 'நோட்டை பகுப்பாய்', 'கண்டறி', 'ஆய்வு செய்'],
+      action: runDetection,
+      confirmEn: 'Analyzing currency.',
+      confirmTa: 'நோட்டை பகுப்பாய்வு செய்கிறது.',
+    },
+    {
+      patterns: ['read result', 'what is it', 'tell me', 'say result', 'which note',
+                 'முடிவு படி', 'என்ன நோட்டு', 'சொல்'],
+      action: readResult,
+      confirmEn: 'Reading detection result.',
+      confirmTa: 'கண்டறிந்த முடிவை படிக்கிறது.',
+    },
+    {
+      patterns: ['clear', 'reset', 'new photo', 'new image', 'start over',
+                 'அழி', 'மீட்டமை', 'புதிய படம்'],
+      action: reset,
+      confirmEn: 'Cleared. Ready for a new photo.',
+      confirmTa: 'அழிக்கப்பட்டது. புதிய படத்திற்கு தயாராக உள்ளது.',
+    },
+    {
+      patterns: ['help', 'commands', 'what can i say', 'உதவி', 'கட்டளைகள்'],
+      action: () => speak(
+        isTamil
+          ? 'கட்டளைகள்: படம் பதிவேற்று, புகைப்படம் எடு, கண்டறி, முடிவு படி, அழி'
+          : 'Commands: upload image, take photo, analyze, read result, clear.',
+        0.88, lang,
+      ),
+      confirmEn: 'Listing commands.',
+      confirmTa: 'கட்டளைகளை அறிவிக்கிறது.',
+    },
+  ], [openFile, takePhoto, runDetection, readResult, reset, isTamil, lang]);
+
+  const { listening: vcListening, transcript: vcTranscript, supported: vcSupported, toggle: vcToggle } =
+    usePageVoiceCommands({
+      lang,
+      commands: currencyCommands,
+      activateMessageEn: 'Currency detection voice commands active. Say "upload image", "analyze", or "help".',
+      activateMessageTa: 'நோட்டு கண்டறிதல் குரல் கட்டளைகள் இயக்கப்பட்டது. "படம் பதிவேற்று", "கண்டறி" என்று சொல்லுங்கள்.',
+    });
 
   if (!user) return null;
 
